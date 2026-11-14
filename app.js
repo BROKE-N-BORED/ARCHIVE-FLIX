@@ -49,7 +49,7 @@ var GENRES = {
 };
 
 var THEMES = [
-  { id: "flix",     name: "Archive Red",  colors: ["#141414", "#e50914", "#f5f5f5"] },
+  { id: "flix",     name: "Cinema Gold",  colors: ["#0f0f0f", "#f0b429", "#f5f5f5"] },
   { id: "midnight", name: "Midnight",     colors: ["#0d1526", "#3b82f6", "#eef2ff"] },
   { id: "forest",   name: "Forest",       colors: ["#101a12", "#22c55e", "#edf5ee"] },
   { id: "sunset",   name: "Sunset",       colors: ["#1d1410", "#f59e0b", "#fdf3e7"] },
@@ -265,7 +265,8 @@ function defaultState() {
     theme: "flix",
     customAccent: "",
     omdbKey: "",
-    omdbCache: {}
+    omdbCache: {},
+    tmdbKey: ""
   };
 }
 
@@ -435,6 +436,326 @@ function omdbRating(title, year) {
   }).catch(function () { return null; });
 }
 
+/* ---------- Real movie posters ---------- */
+/* Cards show the Archive thumbnail right away, then upgrade to a real
+   movie poster when one resolves. Layers, best first:
+   1. OMDb poster (needs the user's free OMDb key)
+   2. TMDB poster (needs the user's free TMDB key)
+   3. The Archive item's own poster or cover image files
+   4. Wikimedia Commons public domain poster search (no key)
+   5. The Archive thumbnail (the starting image, always the fallback)
+   Every layer fails silently into the next, and resolved posters are
+   cached in localStorage so they are not re-fetched every visit. */
+
+var POSTER_CACHE_KEY = "archiveflix.posters.v1";
+var POSTER_CACHE_MAX = 400;
+var POSTER_CACHE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function loadPosterCache() {
+  try {
+    var raw = window.localStorage.getItem(POSTER_CACHE_KEY);
+    if (!raw) return {};
+    var c = JSON.parse(raw);
+    if (!c || typeof c !== "object") return {};
+    var now = Date.now();
+    Object.keys(c).forEach(function (k) {
+      if (!c[k] || now - (c[k].ts || 0) > POSTER_CACHE_MS) delete c[k];
+    });
+    return c;
+  } catch (e) {
+    return {};
+  }
+}
+
+var posterCache = loadPosterCache();
+var posterAttempted = {};
+
+function savePosterCache() {
+  try {
+    var keys = Object.keys(posterCache);
+    if (keys.length > POSTER_CACHE_MAX) {
+      keys.sort(function (a, b) { return (posterCache[a].ts || 0) - (posterCache[b].ts || 0); });
+      keys.slice(0, keys.length - POSTER_CACHE_MAX).forEach(function (k) { delete posterCache[k]; });
+    }
+    window.localStorage.setItem(POSTER_CACHE_KEY, JSON.stringify(posterCache));
+  } catch (e) { /* private mode or full: posters just re-resolve next visit */ }
+}
+
+function clearPosterCache() {
+  posterCache = {};
+  posterAttempted = {};
+  try { window.localStorage.removeItem(POSTER_CACHE_KEY); } catch (e) {}
+}
+
+/* Clean a catalog title for poster matching: drop parentheticals, a
+   trailing year and anything after it, and colorized tags. */
+function cleanSearchTitle(title) {
+  var t = String(title || "").replace(/\s+/g, " ").trim();
+  t = t.replace(/\s*\([^)]*\)\s*/g, " ").trim();
+  var m = /^(.+?)\s+\b(19|20)\d{2}\b.*$/.exec(t);
+  if (m) t = m[1].trim();
+  t = t.replace(/\bcolori[sz]ed\b.*$/i, "").trim();
+  return t.replace(/\s+/g, " ").trim();
+}
+
+/* Pick a poster or cover image from an Archive metadata files list.
+   Ranks poster over cover over front over folder, skips thumbnails,
+   gifs and tiny files. */
+function pickArchivePosterFile(files) {
+  files = files || [];
+  var ranked = [];
+  files.forEach(function (f) {
+    if (!f || !f.name) return;
+    var name = String(f.name).toLowerCase();
+    if (!/\.(jpg|jpeg|png|webp)$/i.test(name)) return;
+    if (name.indexOf("thumb") !== -1) return;
+    if (Number(f.size) < 5000) return;
+    var rank = -1;
+    if (name.indexOf("poster") !== -1) rank = 0;
+    else if (name.indexOf("cover") !== -1) rank = 1;
+    else if (name.indexOf("front") !== -1) rank = 2;
+    else if (name.indexOf("folder") !== -1) rank = 3;
+    if (rank === -1) return;
+    ranked.push({ file: f, rank: rank });
+  });
+  if (!ranked.length) return null;
+  ranked.sort(function (a, b) {
+    return a.rank - b.rank || Number(b.file.size) - Number(a.file.size);
+  });
+  return ranked[0].file;
+}
+
+/* Pick the best poster from a Wikimedia Commons image search result.
+   pages is an array of {title, imageinfo: [{url, thumburl, width, height, mime}]}.
+   Only files named like posters, covers or lobby cards count, so film
+   stills and logos do not slip in; title words break ties. A file
+   dated to a different year than the film is the wrong poster (a
+   remake's, usually) and is skipped outright. */
+function pickCommonsPoster(pages, title, year) {
+  pages = pages || [];
+  var words = cleanSearchTitle(title).toLowerCase().split(/[^a-z0-9]+/)
+    .filter(function (w) { return w.length > 3; });
+  var best = null, bestScore = 0, bestWidth = 0;
+  pages.forEach(function (p) {
+    var info = (p.imageinfo || [])[0];
+    if (!info) return;
+    if (info.mime !== "image/jpeg" && info.mime !== "image/png") return;
+    if (Number(info.width) < 300 || Number(info.height) < 300) return;
+    var name = String(p.title || "").toLowerCase();
+    if (name.indexOf("screenshot") !== -1 || name.indexOf("logo") !== -1 ||
+        name.indexOf("soundtrack") !== -1) return;
+    var score = 0;
+    if (name.indexOf("poster") !== -1 || name.indexOf("one-sheet") !== -1 ||
+        name.indexOf("onesheet") !== -1) score += 3;
+    if (name.indexOf("cover") !== -1) score += 2;
+    if (name.indexOf("lobby") !== -1) score += 2;
+    if (score === 0) return;
+    if (year) {
+      var years = name.match(/\b(19|20)\d{2}\b/g) || [];
+      if (years.length && years.indexOf(String(year)) === -1) return;
+      if (years.indexOf(String(year)) !== -1) score += 2;
+    }
+    words.forEach(function (w) { if (name.indexOf(w) !== -1) score += 1; });
+    if (score > bestScore || (score === bestScore && Number(info.width) > bestWidth)) {
+      bestScore = score;
+      bestWidth = Number(info.width);
+      best = info.thumburl || info.url;
+    }
+  });
+  return best;
+}
+
+function tmdbPosterUrl(path) {
+  return path ? "https://image.tmdb.org/t/p/w342" + path : null;
+}
+
+/* OMDb poster. Exact title first, then a search for the first result
+   that actually has a poster. "N/A" means no poster. */
+function omdbPoster(title, year) {
+  var key = state.omdbKey;
+  if (!key) return Promise.resolve(null);
+  var t = cleanSearchTitle(title);
+  if (!t) return Promise.resolve(null);
+  var base = "https://www.omdbapi.com/?apikey=" + encodeURIComponent(key);
+  if (year) base += "&y=" + encodeURIComponent(year);
+  function posterOf(j) {
+    if (!j || j.Poster == null || j.Poster === "N/A") return null;
+    return j.Poster;
+  }
+  return fetch(base + "&t=" + encodeURIComponent(t))
+    .then(function (res) { return res.json(); })
+    .then(function (j) {
+      var p = posterOf(j);
+      if (p) return p;
+      return fetch(base + "&s=" + encodeURIComponent(t))
+        .then(function (res) { return res.json(); })
+        .then(function (j2) {
+          var list = (j2 && j2.Search) || [];
+          for (var i = 0; i < list.length; i++) {
+            var q = posterOf(list[i]);
+            if (q) return q;
+          }
+          return null;
+        });
+    })
+    .catch(function () { return null; });
+}
+
+function tmdbSearch(endpoint, q, year, key) {
+  var url = "https://api.themoviedb.org/3/search/" + endpoint +
+    "?api_key=" + encodeURIComponent(key) + "&query=" + encodeURIComponent(q) +
+    "&include_adult=false";
+  if (year) url += "&" + (endpoint === "tv" ? "first_air_date_year=" : "year=") +
+    encodeURIComponent(year);
+  return fetch(url).then(function (res) { return res.json(); }).then(function (j) {
+    var list = (j && j.results) || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].poster_path) return tmdbPosterUrl(list[i].poster_path);
+    }
+    return null;
+  }).catch(function () { return null; });
+}
+
+/* TMDB poster, matched by title and year. Shows search TV first,
+   everything else searches movies first, then the other side. */
+function tmdbPoster(title, year, type) {
+  var key = state.tmdbKey;
+  if (!key) return Promise.resolve(null);
+  var t = cleanSearchTitle(title);
+  if (!t) return Promise.resolve(null);
+  var first = type === "show" ? "tv" : "movie";
+  var second = first === "tv" ? "movie" : "tv";
+  return tmdbSearch(first, t, year, key).then(function (p) {
+    if (p) return p;
+    return tmdbSearch(second, t, year, key);
+  });
+}
+
+/* The Archive item's own poster or cover files, from its metadata
+   (the metadata call is already cached per session). */
+function archivePoster(id) {
+  return getMetadata(id).then(function (json) {
+    var f = pickArchivePosterFile((json || {}).files);
+    return f ? downloadUrl(id, f.name) : null;
+  }).catch(function () { return null; });
+}
+
+/* Wikimedia Commons public domain poster search. No key needed. */
+function commonsPoster(title, year) {
+  var t = cleanSearchTitle(title);
+  if (!t) return Promise.resolve(null);
+  var url = "https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*"
+    + "&generator=search&gsrsearch=" + encodeURIComponent('"' + t + '" poster')
+    + "&gsrnamespace=6&gsrlimit=12&prop=imageinfo&iiprop=url%7Csize%7Cmime&iiurlwidth=500";
+  return fetch(url).then(function (res) { return res.json(); }).then(function (j) {
+    var pages = ((j.query || {}).pages) || {};
+    var list = Object.keys(pages).map(function (k) { return pages[k]; });
+    return pickCommonsPoster(list, title, year);
+  }).catch(function () { return null; });
+}
+
+/* Run the layers in order. Returns a poster URL or null (keep the
+   Archive thumbnail). The result is cached either way. */
+function resolvePoster(item) {
+  var id = item.id;
+  var cached = posterCache[id];
+  if (cached) return Promise.resolve(cached.url);
+  return omdbPoster(item.title, item.year).then(function (p) {
+    if (p) return p;
+    return tmdbPoster(item.title, item.year, item.type);
+  }).then(function (p) {
+    if (p) return p;
+    return archivePoster(id);
+  }).then(function (p) {
+    if (p) return p;
+    return commonsPoster(item.title, item.year);
+  }).then(function (p) {
+    posterCache[id] = { url: p || null, ts: Date.now() };
+    savePosterCache();
+    return p || null;
+  }).catch(function () { return null; });
+}
+
+/* Poster upgrades run through a small queue so a row of cards never
+   fires off a dozen requests at once, and only for cards near the
+   viewport, so scrolling a row never blocks the page. */
+
+var posterQueue = [];
+var posterInFlight = 0;
+var POSTER_MAX_INFLIGHT = 3;
+var posterObserver = null;
+var posterImgItems = (typeof WeakMap !== "undefined") ? new WeakMap() : null;
+
+function posterQueueRun(job) {
+  posterInFlight++;
+  resolvePoster(job.item).then(function (url) {
+    posterInFlight--;
+    if (url && job.img.src !== url) job.img.src = url;
+    posterQueuePump();
+  }).catch(function () { posterInFlight--; posterQueuePump(); });
+}
+
+function posterQueuePump() {
+  while (posterInFlight < POSTER_MAX_INFLIGHT && posterQueue.length) {
+    posterQueueRun(posterQueue.shift());
+  }
+}
+
+function ensurePosterObserver() {
+  if (posterObserver) return posterObserver;
+  if (typeof IntersectionObserver === "undefined") return null;
+  posterObserver = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (!entry.isIntersecting) return;
+      var img = entry.target;
+      posterObserver.unobserve(img);
+      var item = posterImgItems ? posterImgItems.get(img) : null;
+      if (item) {
+        posterQueue.push({ img: img, item: item });
+        posterQueuePump();
+      }
+    });
+  }, { rootMargin: "200px" });
+  return posterObserver;
+}
+
+/* If an upgraded poster fails to load, fall back to the Archive
+   thumbnail instead of leaving a blank card. The inline onerror
+   handler hides the image first; this restores it with the thumbnail. */
+function posterErrorGuard(img, item) {
+  function onErr() {
+    img.removeEventListener("error", onErr);
+    if (img.src !== posterUrl(item.id)) {
+      img.style.display = "";
+      img.src = posterUrl(item.id);
+    }
+  }
+  img.addEventListener("error", onErr);
+}
+
+/* Upgrade one image to a real poster when one resolves. The Archive
+   thumbnail stays put until something better arrives, and nothing
+   here ever blocks the rows. */
+function upgradePoster(img, item) {
+  if (!img || !item || !item.id) return;
+  posterErrorGuard(img, item);
+  var cached = posterCache[item.id];
+  if (cached) {
+    if (cached.url && img.src !== cached.url) img.src = cached.url;
+    return;
+  }
+  if (posterAttempted[item.id]) return;
+  posterAttempted[item.id] = true;
+  var obs = ensurePosterObserver();
+  if (obs && posterImgItems) {
+    posterImgItems.set(img, item);
+    obs.observe(img);
+  } else {
+    posterQueue.push({ img: img, item: item });
+    posterQueuePump();
+  }
+}
+
 /* ---------- UI helpers ---------- */
 
 var toastTimer = null;
@@ -477,12 +798,16 @@ function cardEl(item) {
     'onerror="this.style.display=\'none\'"></span>' +
     '<span class="card-body"><span class="card-title">' + esc(item.title) + "</span>" +
     '<span class="card-meta">' + esc(meta) + "</span>" +
+    (item.type === "show" ? '<span class="card-badge type-badge">TV Show</span>' :
+     item.type === "cartoon" ? '<span class="card-badge type-badge">Cartoon</span>' : "") +
     (badge ? '<span class="card-badge">' + esc(badge) + "</span>" : "") +
     (prog > 0 && prog < 1
       ? '<span class="progress-track"><span class="progress-fill" style="width:' + Math.round(prog * 100) + '%"></span></span>'
       : "") +
     (prog >= 1 ? '<span class="card-badge">Watched</span>' : "") +
     "</span>";
+  var posterImg = btn.querySelector("img");
+  if (posterImg) upgradePoster(posterImg, item);
   btn.addEventListener("click", function () { openDetails(item); });
   return btn;
 }
@@ -689,8 +1014,10 @@ function renderHero(item) {
     (item.description ? descHtml(item.description, "hero-desc") : "") +
     '<div class="hero-actions">' +
     '<button class="btn btn-primary" id="heroPlay">Play</button>' +
-    '<button class="btn" id="heroDetails">Details</button>' +
+    '<button class="btn" id="heroDetails">More Info</button>' +
     "</div></div>";
+  var heroImg = hero.querySelector(".hero-img");
+  if (heroImg) upgradePoster(heroImg, item);
   document.getElementById("heroPlay").addEventListener("click", function () { openPlayer(item); });
   document.getElementById("heroDetails").addEventListener("click", function () { openDetails(item); });
   wireExpandableDescs(hero);
@@ -1048,6 +1375,8 @@ function openDetails(item) {
       "</div></div>" +
       '<h3 class="similar-head">More Like This</h3><div class="row-scroll" id="similarRow"></div>';
 
+    var detImg = body.querySelector(".details-poster");
+    if (detImg) upgradePoster(detImg, item);
     document.getElementById("dPlay").addEventListener("click", function () { openPlayer(fullItem); });
     document.getElementById("dDownload").addEventListener("click", function () {
       var url = dl ? downloadUrl(item.id, dl.name) : detailsUrl(item.id);
@@ -1331,11 +1660,22 @@ function refreshPersonalViews() {
 
 /* ---------- Themes ---------- */
 
+/* Text color for a custom accent: dark text on light accents (gold),
+   white text on dark ones, so buttons stay readable either way. */
+function accentTextFor(hex) {
+  var m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return "#ffffff";
+  var n = parseInt(m[1], 16);
+  var lum = (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) +
+             0.0722 * (n & 255)) / 255;
+  return lum > 0.6 ? "#1c1300" : "#ffffff";
+}
+
 function applyTheme() {
   document.documentElement.setAttribute("data-theme", state.theme || "flix");
   if (state.customAccent) {
     document.documentElement.style.setProperty("--accent", state.customAccent);
-    document.documentElement.style.setProperty("--accent-text", "#ffffff");
+    document.documentElement.style.setProperty("--accent-text", accentTextFor(state.customAccent));
   } else {
     document.documentElement.style.removeProperty("--accent");
     document.documentElement.style.removeProperty("--accent-text");
@@ -1683,6 +2023,7 @@ function init() {
     state.omdbKey = v;
     state.omdbCache = {};
     saveState();
+    clearPosterCache();
     keyInput.value = "";
     keyInput.placeholder = "Key saved";
     if (homeLoaded) loadHome();
@@ -1692,8 +2033,33 @@ function init() {
     state.omdbKey = "";
     state.omdbCache = {};
     saveState();
+    clearPosterCache();
     keyInput.value = "";
     keyInput.placeholder = "Free OMDb API key";
+    if (homeLoaded) loadHome();
+    toast("Key removed");
+  });
+
+  var tmdbInput = document.getElementById("tmdbKeyInput");
+  tmdbInput.value = state.tmdbKey || "";
+  tmdbInput.placeholder = state.tmdbKey ? "Key saved" : "Free TMDB API key";
+  document.getElementById("tmdbSave").addEventListener("click", function () {
+    var v = tmdbInput.value.trim();
+    if (!v) { toast("Paste a key first"); return; }
+    state.tmdbKey = v;
+    saveState();
+    clearPosterCache();
+    tmdbInput.value = "";
+    tmdbInput.placeholder = "Key saved";
+    if (homeLoaded) loadHome();
+    toast("Key saved in this browser only");
+  });
+  document.getElementById("tmdbClear").addEventListener("click", function () {
+    state.tmdbKey = "";
+    saveState();
+    clearPosterCache();
+    tmdbInput.value = "";
+    tmdbInput.placeholder = "Free TMDB API key";
     if (homeLoaded) loadHome();
     toast("Key removed");
   });
@@ -1723,6 +2089,8 @@ function init() {
         syncHideWatchedBoxes();
         keyInput.value = "";
         keyInput.placeholder = state.omdbKey ? "Key saved" : "Free OMDb API key";
+        tmdbInput.value = "";
+        tmdbInput.placeholder = state.tmdbKey ? "Key saved" : "Free TMDB API key";
         if (homeLoaded) loadHome();
         refreshPersonalViews();
         toast("Backup imported");
@@ -1741,6 +2109,9 @@ function init() {
     syncHideWatchedBoxes();
     keyInput.value = "";
     keyInput.placeholder = "Free OMDb API key";
+    tmdbInput.value = "";
+    tmdbInput.placeholder = "Free TMDB API key";
+    clearPosterCache();
     if (homeLoaded) loadHome();
     refreshPersonalViews();
     toast("Everything erased from this browser");
@@ -1776,6 +2147,16 @@ if (typeof module !== "undefined" && module.exports) {
     normalizeDoc: normalizeDoc,
     GENRES: GENRES,
     THEMES: THEMES,
+    accentTextFor: accentTextFor,
+    cleanSearchTitle: cleanSearchTitle,
+    pickArchivePosterFile: pickArchivePosterFile,
+    pickCommonsPoster: pickCommonsPoster,
+    tmdbPosterUrl: tmdbPosterUrl,
+    omdbPoster: omdbPoster,
+    tmdbPoster: tmdbPoster,
+    archivePoster: archivePoster,
+    commonsPoster: commonsPoster,
+    resolvePoster: resolvePoster,
     ROW_DEFS: ROW_DEFS,
     searchUrl: searchUrl,
     buildBrowseQuery: buildBrowseQuery,

@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## v1.2.0 - 2026-11-14
+
+- Netflix grade retouch and redesign, look only, no behavior changed.
+  The hero is now full bleed with the title's backdrop art, a gradient
+  scrim, a big display title, and Play and More Info buttons with real
+  presence. The top bar is a frosted glass strip with a stronger
+  wordmark and a gold underline on the active page. Poster rows have
+  deeper cards with hover lift, rounder corners, and TV Show and
+  Cartoon badges. Browse, details, player, My List, History, and
+  Settings all get the same polish: bigger bolder type, pill badges
+  and chips, focus rings, and a pulsing skeleton while rows load.
+- The default theme is now Cinema Gold, a Netflix dark look with a
+  gold accent like the ARCHIVEFLIX app, and the Archive Red name is
+  retired. All six themes plus the custom accent still work, and a
+  custom light accent now gets dark button text so it stays readable.
+- Real movie posters. Cards show the Archive thumbnail right away,
+  then upgrade to a real poster when one resolves, lazily, so the
+  rows never wait. The layers, best first: the OMDb poster (with a
+  saved OMDb key), the TMDB poster (with a saved TMDB key, a new
+  optional key field in Settings next to OMDb), the Archive item's
+  own poster or cover files, and a Wikimedia Commons public domain
+  poster search. Any layer that fails falls back silently to the
+  next, and the Archive thumbnail is always the fallback, so a
+  missing poster never breaks a card. Resolved posters are cached
+  in the browser for 30 days.
+- The service worker cache is bumped to v2, so installed copies pick
+  up the new look instead of serving the old shell.
+
 ## v1.1.0 - 2026-11-14
 
 - No more reloads on their own. The catalog loads once when the app

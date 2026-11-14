@@ -35,7 +35,7 @@ saved only in your browser.
 - Hide watched toggle: finished titles drop out of every browse row and
   search result. Your own shelves (Continue Watching, Watch Again, My List,
   History) still show them, since that is what they are for.
-- Six themes (Archive Red, Midnight, Forest, Sunset, Light, High Contrast)
+- Six themes (Cinema Gold, Midnight, Forest, Sunset, Light, High Contrast)
   plus a custom accent color picker. Respects reduced motion settings.
 - Export and import your data as a JSON backup from Settings.
 
@@ -95,12 +95,32 @@ for its top titles and sorts by them. The key is stored only in your
 browser's local storage, never in this repo, and is sent only to
 omdbapi.com. Get a free key at omdbapi.com/apikey.aspx.
 
+## Real movie posters
+
+Cards show the Archive thumbnail right away, then upgrade to a real
+movie poster when one resolves. The layers, best first: the OMDb poster
+(when you saved an OMDb key), the TMDB poster (when you saved a TMDB
+key), the Archive item's own poster or cover files, and a Wikimedia
+Commons public domain poster search. Any layer that fails falls back
+silently to the next, and the Archive thumbnail is always the fallback,
+so a missing poster never breaks a card. Resolved posters are cached in
+your browser for 30 days.
+
+To use TMDB posters, add a free TMDB API key in Settings. The key is
+stored only in your browser's local storage, never in this repo, and is
+sent only to api.themoviedb.org. Get a free key at
+themoviedb.org/settings/api. Poster art from TMDB is TMDB's data,
+shown with thanks.
+
 ## Privacy
 
-History, My List, likes, theme and the optional OMDb key live in your
-browser's local storage. Nothing is sent to any server except archive.org
-(for the catalog, playback and downloads) and omdbapi.com (only when you
-saved a key, only for IMDb ratings). The service worker keeps a copy of
+History, My List, likes, theme and the optional OMDb and TMDB keys live
+in your browser's local storage. Nothing is sent to any server except
+archive.org (for the catalog, playback and downloads), omdbapi.com
+(only when you saved a key, only for IMDb ratings and posters),
+api.themoviedb.org (only when you saved a key, only for posters) and
+commons.wikimedia.org (only for public domain poster search). The
+service worker keeps a copy of
 the app itself and a capped set of posters on your device so the app
 opens offline; it never stores your history or your key.
 

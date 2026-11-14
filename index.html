@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ARCHIVEFLIX - Movies, Shows and Cartoons</title>
 <meta name="description" content="ARCHIVEFLIX is a streaming style home screen for free movies, shows and cartoons from archive.org, with watch history, My List and recommendations.">
-<meta name="theme-color" content="#141414">
+<meta name="theme-color" content="#0f0f0f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -170,18 +170,27 @@
     <h2 class="section-title">Theme</h2>
     <div id="themePresets" class="theme-grid"></div>
     <label class="accent-row">Custom accent color
-      <input type="color" id="accentPicker" value="#e50914" aria-label="Custom accent color">
+      <input type="color" id="accentPicker" value="#f0b429" aria-label="Custom accent color">
       <button class="btn btn-ghost" id="accentClear">Use theme color</button>
     </label>
 
     <h2 class="section-title">IMDb ratings (optional)</h2>
-    <p class="sub">The Top IMDb row uses real IMDb ratings only when you add a free OMDb key. The key stays in this browser and is never sent anywhere except omdbapi.com. Without a key, that row falls back to Archive ratings and says so.</p>
+    <p class="sub">The Top IMDb row uses real IMDb ratings, and cards can show real movie posters, only when you add a free OMDb key. The key stays in this browser and is never sent anywhere except omdbapi.com. Without a key, that row falls back to Archive ratings and says so.</p>
     <div class="key-row">
       <input type="password" id="omdbKeyInput" placeholder="Free OMDb API key" aria-label="OMDb API key" autocomplete="off">
       <button class="btn btn-primary" id="omdbSave">Save key</button>
       <button class="btn btn-ghost" id="omdbClear">Remove key</button>
     </div>
     <p class="sub">Get a free key at omdbapi.com/apikey.aspx, then paste it here.</p>
+
+    <h2 class="section-title">TMDB posters (optional)</h2>
+    <p class="sub">Add a free TMDB API key and cards can show real movie posters from TMDB. The key stays in this browser and is never sent anywhere except api.themoviedb.org. Without a key, posters come from the Archive and Wikimedia Commons instead.</p>
+    <div class="key-row">
+      <input type="password" id="tmdbKeyInput" placeholder="Free TMDB API key" aria-label="TMDB API key" autocomplete="off">
+      <button class="btn btn-primary" id="tmdbSave">Save key</button>
+      <button class="btn btn-ghost" id="tmdbClear">Remove key</button>
+    </div>
+    <p class="sub">Get a free key at themoviedb.org/settings/api, then paste it here.</p>
 
     <h2 class="section-title">Install this app</h2>
     <p class="sub">Put ARCHIVEFLIX on your home screen and it opens like a real app, full screen, with its own icon. No app store and no terminal needed.</p>
