@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## v1.3.1 - 2026-11-14
+
+- No more blank thumbnails. Every place a thumbnail appears (poster
+  cards, the details poster, the hero backdrop, history) now has a
+  designed title card behind it: the film's title and year on a
+  theme-aware card, and a gradient backdrop with the title treatment
+  for the hero. A thumbnail that fails to load shows the title card
+  instead of an empty space.
+- Thumbnail validation is in place: a thumbnail's pixels are sampled
+  on a canvas, and a blank or nearly all black frame (including an
+  end credits screen, which is black with a little white text) is
+  rejected in favour of the title card. Real posters are trusted and
+  never validated. Honest limit, found while building this: the check
+  needs the image served with CORS headers, and archive.org serves
+  its images without them, so in practice the check cannot run
+  against Archive thumbnails yet and a blank or credits frame can
+  still show. The check runs in full the day Archive images carry
+  CORS headers; until then the title card covers every failed load.
+- The service worker cache is bumped to v5 so installed copies pick
+  up the new shell.
+
 ## v1.3.0 - 2026-11-14
 
 - Profiles, Netflix style. Up to 5 profiles, each with its own watch

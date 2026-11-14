@@ -1060,7 +1060,7 @@ function posterQueueRun(job) {
   posterInFlight++;
   resolvePoster(job.item).then(function (url) {
     posterInFlight--;
-    if (url && job.img.src !== url) job.img.src = url;
+    if (url) applyRealPoster(job.img, url);
     posterQueuePump();
   }).catch(function () { posterInFlight--; posterQueuePump(); });
 }
@@ -1091,27 +1091,50 @@ function ensurePosterObserver() {
 
 /* If an upgraded poster fails to load, fall back to the Archive
    thumbnail instead of leaving a blank card. The inline onerror
-   handler hides the image first; this restores it with the thumbnail. */
-function posterErrorGuard(img, item) {
+   handler hides the image first; this restores it with the thumbnail,
+   unless the thumbnail was already rejected as a bad frame, in which
+   case the title card stays. If the thumbnail itself fails, the
+   title card is the fallback. The listener stays attached so a
+   restored thumbnail that also fails still lands on the title card;
+   it cannot loop, because the restore only runs when the current
+   source is not already the thumbnail. */
+function posterErrorGuard(img, item, kind) {
   function onErr() {
-    img.removeEventListener("error", onErr);
     if (img.src !== posterUrl(item.id)) {
-      img.style.display = "";
-      img.src = posterUrl(item.id);
+      if (thumbVerdict[item.id] === false) {
+        rejectThumbnail(img, item, kind);
+      } else {
+        img.style.display = "";
+        img.src = posterUrl(item.id);
+      }
+    } else {
+      rejectThumbnail(img, item, kind);
     }
   }
   img.addEventListener("error", onErr);
 }
 
+/* Show a resolved real poster on an image, undoing a title card if
+   one is showing. Real posters are trusted and never validated. */
+function applyRealPoster(img, url) {
+  if (!img || !url || img.src === url) return;
+  img.style.display = "";
+  if (img.dataset) delete img.dataset.thumbRejected;
+  if (img.parentElement && img.parentElement.classList) {
+    img.parentElement.classList.remove("hero-noart");
+  }
+  img.src = url;
+}
+
 /* Upgrade one image to a real poster when one resolves. The Archive
    thumbnail stays put until something better arrives, and nothing
    here ever blocks the rows. */
-function upgradePoster(img, item) {
+function upgradePoster(img, item, kind) {
   if (!img || !item || !item.id) return;
-  posterErrorGuard(img, item);
+  posterErrorGuard(img, item, kind);
   var cached = posterCache[item.id];
   if (cached) {
-    if (cached.url && img.src !== cached.url) img.src = cached.url;
+    if (cached.url) applyRealPoster(img, cached.url);
     return;
   }
   if (posterAttempted[item.id]) return;
@@ -1124,6 +1147,166 @@ function upgradePoster(img, item) {
     posterQueue.push({ img: img, item: item });
     posterQueuePump();
   }
+}
+
+/* ---------- Thumbnail validation ---------- */
+/* The Archive thumbnail is a random video frame, and random frames
+   are often blank, black, or an end credits screen. Those look lazy
+   on a card, so a thumbnail is validated before it is trusted: its
+   pixels are sampled on a canvas, and a blank or nearly all black
+   frame is rejected in favour of a designed title card showing the
+   film's title and year. Only the Archive thumbnail is validated;
+   real posters from OMDb, TMDB, the item's own poster files, and
+   Commons are trusted sources and are shown as-is.
+   HONEST LIMIT: a canvas check needs the image served with CORS
+   headers, and archive.org serves its images without them (verified
+   2026-11-14: services/img, download/__ia_thumb.jpg, and the direct
+   petabox host all answer without Access-Control-Allow-Origin, even
+   when an Origin header is sent, while the JSON APIs do send it).
+   So in practice the probe cannot read Archive thumbnails: it fails,
+   validation switches itself off for the session after two failed
+   probes instead of burning a failed request on every card, and the
+   thumbnail is left showing. The title card still covers every
+   failed thumbnail load, and the validation runs in full the day
+   Archive images carry CORS headers. */
+
+var THUMB_NEAR_BLACK = 24;
+var THUMB_MAX_NEAR_BLACK = 0.90;
+var THUMB_MIN_STDDEV = 5;
+var THUMB_PROBE_ERROR_LIMIT = 2;
+
+function luminanceOf(r, g, b) {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/* Analyze an array of luminance samples (0-255). Pure, so the node
+   test can drive it with fixtures. A frame is bad when nearly all of
+   it is near black (a blank black frame, or an end credits screen:
+   black with a little white text) or when it is flat (a blank frame
+   of any colour). */
+function analyzeFrame(samples) {
+  var n = samples.length;
+  if (!n) return { mean: 0, stddev: 0, nearBlackFrac: 1, bad: true };
+  var sum = 0, nearBlack = 0, i;
+  for (i = 0; i < n; i++) {
+    sum += samples[i];
+    if (samples[i] < THUMB_NEAR_BLACK) nearBlack++;
+  }
+  var mean = sum / n;
+  var sq = 0;
+  for (i = 0; i < n; i++) sq += (samples[i] - mean) * (samples[i] - mean);
+  var stddev = Math.sqrt(sq / n);
+  var nearBlackFrac = nearBlack / n;
+  var bad = nearBlackFrac >= THUMB_MAX_NEAR_BLACK || stddev < THUMB_MIN_STDDEV;
+  return { mean: mean, stddev: stddev, nearBlackFrac: nearBlackFrac, bad: bad };
+}
+
+function isBadThumbnail(samples) {
+  return analyzeFrame(samples).bad;
+}
+
+/* Is this URL an Archive thumbnail (services/img)? Only those are
+   validated; every real poster source bypasses validation. */
+function isArchiveThumbnailUrl(url) {
+  return typeof url === "string" &&
+    url.indexOf("https://archive.org/services/img/") === 0;
+}
+
+/* The designed title card shown when a thumbnail is rejected or
+   fails to load: the film's title and year on a theme-aware card.
+   Pure markup, so the node test can check it. */
+function titleCardHtml(item) {
+  var meta = [item.year ? String(item.year) : "", typeLabel(item.type)]
+    .filter(Boolean).join(" · ");
+  return '<span class="title-card-mark">ARCHIVEFLIX</span>' +
+    '<span class="title-card-title">' + esc(item.title) + "</span>" +
+    (meta ? '<span class="title-card-year">' + esc(meta) + "</span>" : "");
+}
+
+/* Verdicts per item id, so a thumbnail is probed once per session:
+   true = good frame, false = rejected (title card). */
+var thumbVerdict = {};
+var thumbValidationAvailable = true;
+var thumbProbeErrors = 0;
+
+function thumbProbeFailed() {
+  thumbProbeErrors++;
+  if (thumbProbeErrors >= THUMB_PROBE_ERROR_LIMIT) {
+    thumbValidationAvailable = false;
+  }
+}
+
+/* Hide the image to reveal the designed title card behind it (for
+   the hero, the gradient backdrop plus the title treatment already
+   in the hero content). Records the rejection so the frame is never
+   shown again this session. */
+function rejectThumbnail(img, item, kind) {
+  if (item && item.id) thumbVerdict[item.id] = false;
+  if (!img) return;
+  img.style.display = "none";
+  if (img.dataset) img.dataset.thumbRejected = "1";
+  if (kind === "hero" && img.parentElement && img.parentElement.classList) {
+    img.parentElement.classList.add("hero-noart");
+  }
+}
+
+/* Probe one thumbnail through a canvas and reject it if it is blank
+   or nearly all black. Runs only while the image still shows the
+   Archive thumbnail; a real poster bypasses it entirely. A probe
+   that cannot read its pixels (no CORS headers, network failure)
+   leaves the thumbnail showing: fail open, never blank a card that
+   might be fine. */
+function probeThumbnail(img, item, kind) {
+  if (!img || !item || !item.id) return;
+  if (thumbVerdict[item.id] !== undefined) return;
+  if (!thumbValidationAvailable) return;
+  if (!isArchiveThumbnailUrl(img.src)) return;
+  if (typeof Image === "undefined" || typeof document === "undefined") return;
+  var probe = new Image();
+  probe.crossOrigin = "anonymous";
+  probe.onload = function () {
+    try {
+      var canvas = document.createElement("canvas");
+      var W = 32, H = 18;
+      canvas.width = W; canvas.height = H;
+      var ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(probe, 0, 0, W, H);
+      var data = ctx.getImageData(0, 0, W, H).data;
+      var samples = [];
+      for (var i = 0; i < data.length; i += 4) {
+        samples.push(luminanceOf(data[i], data[i + 1], data[i + 2]));
+      }
+      /* The card may have upgraded to a real poster while the probe
+         was in flight; only the thumbnail gets a verdict. */
+      if (!isArchiveThumbnailUrl(img.src)) return;
+      if (isBadThumbnail(samples)) {
+        rejectThumbnail(img, item, kind);
+      } else {
+        thumbVerdict[item.id] = true;
+      }
+      thumbProbeErrors = 0;
+    } catch (e) {
+      thumbProbeFailed();
+    }
+  };
+  probe.onerror = function () { thumbProbeFailed(); };
+  probe.src = img.src;
+}
+
+/* Guard one thumbnail image: validate it when it loads (and again
+   whenever a thumbnail is restored after an upgraded poster fails).
+   A known-bad thumbnail is rejected at once instead of flashing on
+   screen first. Call after upgradePoster, so a cached real poster
+   is already showing and no probe starts for it. */
+function guardThumbnail(img, item, kind) {
+  if (!img || !item || !item.id) return;
+  if (thumbVerdict[item.id] === false && isArchiveThumbnailUrl(img.src)) {
+    rejectThumbnail(img, item, kind);
+    return;
+  }
+  img.addEventListener("load", function () { probeThumbnail(img, item, kind); });
+  if (img.complete && img.naturalWidth > 0) probeThumbnail(img, item, kind);
 }
 
 /* ---------- UI helpers ---------- */
@@ -1163,7 +1346,7 @@ function cardEl(item) {
   var prog = h ? h.progress : 0;
   var meta = [item.year ? String(item.year) : "", typeLabel(item.type)].filter(Boolean).join(" · ");
   btn.innerHTML =
-    '<span class="poster"><span class="poster-fallback">' + esc(item.title) + "</span>" +
+    '<span class="poster"><span class="title-card">' + titleCardHtml(item) + "</span>" +
     '<img src="' + posterUrl(item.id) + '" alt="" loading="lazy" ' +
     'onerror="this.style.display=\'none\'"></span>' +
     '<span class="card-body"><span class="card-title">' + esc(item.title) + "</span>" +
@@ -1177,7 +1360,10 @@ function cardEl(item) {
     (prog >= 1 ? '<span class="card-badge">Watched</span>' : "") +
     "</span>";
   var posterImg = btn.querySelector("img");
-  if (posterImg) upgradePoster(posterImg, item);
+  if (posterImg) {
+    upgradePoster(posterImg, item, "card");
+    guardThumbnail(posterImg, item, "card");
+  }
   btn.addEventListener("click", function () { openDetails(item); });
   return btn;
 }
@@ -1387,7 +1573,10 @@ function renderHero(item) {
     '<button class="btn" id="heroDetails">More Info</button>' +
     "</div></div>";
   var heroImg = hero.querySelector(".hero-img");
-  if (heroImg) upgradePoster(heroImg, item);
+  if (heroImg) {
+    upgradePoster(heroImg, item, "hero");
+    guardThumbnail(heroImg, item, "hero");
+  }
   document.getElementById("heroPlay").addEventListener("click", function () { openPlayer(item); });
   document.getElementById("heroDetails").addEventListener("click", function () { openDetails(item); });
   wireExpandableDescs(hero);
@@ -1722,7 +1911,8 @@ function openDetails(item) {
 
     body.innerHTML =
       '<div class="details-top">' +
-      '<img class="details-poster" src="' + posterUrl(item.id) + '" alt="" onerror="this.style.display=\'none\'">' +
+      '<div class="details-poster-wrap"><div class="title-card">' + titleCardHtml(item) + "</div>" +
+      '<img class="details-poster" src="' + posterUrl(item.id) + '" alt="" onerror="this.style.display=\'none\'"></div>' +
       '<div class="details-info"><h2>' + esc(item.title) + "</h2>" +
       '<p class="details-meta">' + esc([year, typeLabel(item.type),
         creator ? "By " + creator : "", runtime,
@@ -1746,7 +1936,10 @@ function openDetails(item) {
       '<h3 class="similar-head">More Like This</h3><div class="row-scroll" id="similarRow"></div>';
 
     var detImg = body.querySelector(".details-poster");
-    if (detImg) upgradePoster(detImg, item);
+    if (detImg) {
+      upgradePoster(detImg, item, "details");
+      guardThumbnail(detImg, item, "details");
+    }
     document.getElementById("dPlay").addEventListener("click", function () { openPlayer(fullItem); });
     document.getElementById("dDownload").addEventListener("click", function () {
       var url = dl ? downloadUrl(item.id, dl.name) : detailsUrl(item.id);
@@ -2004,7 +2197,8 @@ function renderHistory() {
     var div = document.createElement("div");
     div.className = "history-item";
     div.innerHTML =
-      '<img class="history-thumb" src="' + posterUrl(h.id) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">' +
+      '<span class="history-thumb-wrap"><span class="title-card title-card-mini">' + titleCardHtml(item) + "</span>" +
+      '<img class="history-thumb" src="' + posterUrl(h.id) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'"></span>' +
       '<div class="history-main"><div class="card-title">' + esc(h.title) + "</div>" +
       '<div class="card-meta">' + esc([h.year ? String(h.year) : "", typeLabel(h.type),
         formatDate(h.lastWatchedAt), h.watchCount ? "Watched " + h.watchCount + " time" + (h.watchCount === 1 ? "" : "s") : ""]
@@ -2023,6 +2217,15 @@ function renderHistory() {
       renderHistory();
       toast("Removed from history");
     });
+    /* History thumbs are never upgraded to real posters, so they get
+       the thumbnail guard plus their own error handler: any load
+       failure here is the thumbnail failing, and the title card is
+       the fallback. */
+    var thumb = div.querySelector(".history-thumb");
+    if (thumb) {
+      thumb.addEventListener("error", function () { rejectThumbnail(thumb, item, "history"); });
+      guardThumbnail(thumb, item, "history");
+    }
     list.appendChild(div);
   });
 }
@@ -3054,6 +3257,15 @@ if (typeof module !== "undefined" && module.exports) {
     archivePoster: archivePoster,
     commonsPoster: commonsPoster,
     resolvePoster: resolvePoster,
+    analyzeFrame: analyzeFrame,
+    isBadThumbnail: isBadThumbnail,
+    isArchiveThumbnailUrl: isArchiveThumbnailUrl,
+    titleCardHtml: titleCardHtml,
+    rejectThumbnail: rejectThumbnail,
+    applyRealPoster: applyRealPoster,
+    posterErrorGuard: posterErrorGuard,
+    probeThumbnail: probeThumbnail,
+    guardThumbnail: guardThumbnail,
     ROW_DEFS: ROW_DEFS,
     searchUrl: searchUrl,
     buildBrowseQuery: buildBrowseQuery,
@@ -3087,6 +3299,14 @@ if (typeof module !== "undefined" && module.exports) {
       loadStores();
     },
     testRawStore: function (key) { return storeGet(key); },
+    /* Thumbnail validation test hooks. */
+    testThumbVerdict: function (id) { return thumbVerdict[id]; },
+    testThumbValidationAvailable: function () { return thumbValidationAvailable; },
+    testResetThumbValidation: function () {
+      thumbVerdict = {};
+      thumbValidationAvailable = true;
+      thumbProbeErrors = 0;
+    },
     testGetState: function () { return state; },
     testGetProfiles: function () { return profilesStore; },
     filterVisibleWith: function (items, st) {

@@ -109,7 +109,14 @@ key), the Archive item's own poster or cover files, and a Wikimedia
 Commons public domain poster search. Any layer that fails falls back
 silently to the next, and the Archive thumbnail is always the fallback,
 so a missing poster never breaks a card. Resolved posters are cached in
-your browser for 30 days.
+your browser for 30 days. Behind every thumbnail sits a designed title
+card with the film's title and year, so a thumbnail that fails to load
+shows the title card instead of an empty space. Thumbnails are also
+checked for blank or nearly all black frames (including end credits
+screens) and replaced by the title card when the check can run; the
+check needs the image served with CORS headers, which archive.org does
+not send for its images yet, so a blank or credits frame can still show
+until that changes.
 
 To use TMDB posters, add a free TMDB API key in Settings. The key is
 stored only in your browser's local storage, never in this repo, and is
