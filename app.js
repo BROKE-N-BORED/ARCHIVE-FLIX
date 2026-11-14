@@ -736,31 +736,55 @@ function loadHome() {
 /* ---------- Browse ---------- */
 
 var browseState = { query: "", type: "all", genre: "", sub: "", decade: "",
+  year: "", yearFrom: "", yearTo: "",
   minRating: 0, sort: "trending", start: 0, total: 0, loading: false };
 var searchTimer = null;
 
-function browseQuery() {
+var YEAR_MIN = 1890;
+var YEAR_MAX = 2026;
+
+function isYear(v) {
+  return /^\d{4}$/.test(String(v || "")) &&
+    Number(v) >= YEAR_MIN && Number(v) <= YEAR_MAX;
+}
+
+/* Builds the Archive query from a browse state object, so the node smoke
+   test can drive it without a DOM. Year, range and decade are all ANDed
+   in; a year outside its decade simply matches nothing, and Browse shows
+   the honest empty state. */
+function buildBrowseQuery(s) {
   var parts = [];
-  var t = browseState.type;
+  var t = s.type;
   if (t === "movie") parts.push(MOVIES);
   else if (t === "show") parts.push("collection:classic_tv");
   else if (t === "cartoon") parts.push("collection:classic_cartoons");
   else parts.push("(collection:feature_films OR collection:classic_tv OR collection:classic_cartoons)");
-  if (browseState.genre && GENRES[browseState.genre]) {
-    parts.push("subject:" + GENRES[browseState.genre].subject);
+  if (s.genre && GENRES[s.genre]) {
+    parts.push("subject:" + GENRES[s.genre].subject);
   }
-  if (browseState.sub) {
-    parts.push('subject:"' + browseState.sub.replace(/"/g, "") + '"');
+  if (s.sub) {
+    parts.push('subject:"' + s.sub.replace(/"/g, "") + '"');
   }
-  if (browseState.decade) {
-    var d = browseState.decade.split("-");
+  if (s.decade) {
+    var d = s.decade.split("-");
     parts.push("year:[" + d[0] + " TO " + d[1] + "]");
   }
-  if (browseState.query) {
-    var terms = browseState.query.replace(/["()]/g, " ").trim().split(/\s+/).join(" ");
+  if (s.year && isYear(s.year)) {
+    parts.push("year:" + s.year);
+  } else if (s.yearFrom || s.yearTo) {
+    var from = isYear(s.yearFrom) ? s.yearFrom : String(YEAR_MIN);
+    var to = isYear(s.yearTo) ? s.yearTo : String(YEAR_MAX);
+    parts.push("year:[" + from + " TO " + to + "]");
+  }
+  if (s.query) {
+    var terms = s.query.replace(/["()]/g, " ").trim().split(/\s+/).join(" ");
     if (terms) parts.push("title:(" + terms + ")");
   }
   return parts.join(" AND ");
+}
+
+function browseQuery() {
+  return buildBrowseQuery(browseState);
 }
 
 function browseSortParam() {
@@ -828,7 +852,7 @@ function runBrowse(reset) {
     var grid = document.getElementById("browseGrid");
     if (!items.length && browseState.start === 0) {
       grid.innerHTML = '<div class="empty-state">Nothing matched those filters. ' +
-        "Try a different genre, decade or search term.</div>";
+        "Try a different genre, decade, year or search term.</div>";
     } else {
       items.forEach(function (it) { grid.appendChild(cardEl(it)); });
     }
@@ -1137,9 +1161,25 @@ function onHideWatchedChange(checked) {
   renderMyList();
 }
 
+/* Fill the Year, From year and To year selects, newest first. A single
+   year and a range never apply together: picking one clears the other,
+   so the query always means what the bar shows. */
+function populateYearSelects() {
+  ["filterYear", "filterYearFrom", "filterYearTo"].forEach(function (id) {
+    var sel = document.getElementById(id);
+    for (var y = YEAR_MAX; y >= YEAR_MIN; y--) {
+      var opt = document.createElement("option");
+      opt.value = String(y);
+      opt.textContent = String(y);
+      sel.appendChild(opt);
+    }
+  });
+}
+
 function init() {
   applyTheme();
   renderThemePresets();
+  populateYearSelects();
   syncHideWatchedBoxes();
 
   var resizeTimer = null;
@@ -1181,6 +1221,38 @@ function init() {
     browseState.decade = e.target.value;
     runBrowse(true);
   });
+  document.getElementById("filterYear").addEventListener("change", function (e) {
+    browseState.year = e.target.value;
+    if (browseState.year) {
+      browseState.yearFrom = "";
+      browseState.yearTo = "";
+      document.getElementById("filterYearFrom").value = "";
+      document.getElementById("filterYearTo").value = "";
+    }
+    runBrowse(true);
+  });
+  document.getElementById("filterYearFrom").addEventListener("change", function (e) {
+    browseState.yearFrom = e.target.value;
+    browseState.year = "";
+    document.getElementById("filterYear").value = "";
+    if (browseState.yearFrom && browseState.yearTo &&
+        Number(browseState.yearFrom) > Number(browseState.yearTo)) {
+      browseState.yearTo = browseState.yearFrom;
+      document.getElementById("filterYearTo").value = browseState.yearTo;
+    }
+    runBrowse(true);
+  });
+  document.getElementById("filterYearTo").addEventListener("change", function (e) {
+    browseState.yearTo = e.target.value;
+    browseState.year = "";
+    document.getElementById("filterYear").value = "";
+    if (browseState.yearFrom && browseState.yearTo &&
+        Number(browseState.yearTo) < Number(browseState.yearFrom)) {
+      browseState.yearFrom = browseState.yearTo;
+      document.getElementById("filterYearFrom").value = browseState.yearFrom;
+    }
+    runBrowse(true);
+  });
   document.getElementById("filterRating").addEventListener("change", function (e) {
     browseState.minRating = Number(e.target.value);
     runBrowse(true);
@@ -1196,12 +1268,18 @@ function init() {
     browseState.genre = "";
     browseState.sub = "";
     browseState.decade = "";
+    browseState.year = "";
+    browseState.yearFrom = "";
+    browseState.yearTo = "";
     browseState.minRating = 0;
     browseState.sort = "trending";
     document.getElementById("searchInput").value = "";
     document.getElementById("filterType").value = "all";
     document.getElementById("filterGenre").value = "";
     document.getElementById("filterDecade").value = "";
+    document.getElementById("filterYear").value = "";
+    document.getElementById("filterYearFrom").value = "";
+    document.getElementById("filterYearTo").value = "";
     document.getElementById("filterRating").value = "0";
     document.getElementById("filterSort").value = "trending";
     runBrowse(true);
@@ -1352,6 +1430,7 @@ if (typeof module !== "undefined" && module.exports) {
     THEMES: THEMES,
     ROW_DEFS: ROW_DEFS,
     searchUrl: searchUrl,
+    buildBrowseQuery: buildBrowseQuery,
     defaultState: defaultState,
     filterVisibleWith: function (items, st) {
       var saved = state;

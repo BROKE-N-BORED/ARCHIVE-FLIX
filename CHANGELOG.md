@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v1.0.2 - 2026-11-14
+
+- Browse gains a year filter next to the decade filter: pick a single
+  year (1890 to 2026), or a From and To year range. Picking a year clears
+  the range, and picking a range clears the single year, so the two never
+  fight. Year combines with every other filter, and a year and decade
+  that do not overlap simply shows the empty state. Clear filters resets
+  the year controls too.
+
 ## v1.0.1 - 2026-11-14
 
 - Descriptions no longer cut off with no way to read the rest. The hero

@@ -13,7 +13,8 @@ saved only in your browser.
   Cartoons, Animation, Newly Added, Golden Age 1930s, Silent Era,
   Directors Picks and Top IMDb.
 - Browse with search, type filter (movie, show, cartoon), genre and
-  sub-genre chips, decade, minimum rating and six sort orders.
+  sub-genre chips, decade, year (single year or From/To range), minimum
+  rating and six sort orders.
 - Details for every title: synopsis, director, year, runtime, Archive star
   rating, subject tags, More Like This, a Download button and a progress
   slider for your place in the film.
