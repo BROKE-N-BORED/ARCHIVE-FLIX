@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## v1.2.1 - 2026-11-14
+
+- Updates now show up on their own. The app watches for a new
+  service worker taking control and reloads once to show the new
+  version, instead of sitting on the old shell until the next manual
+  reload. It never reloads while a film is playing: if an update
+  arrives mid-watch, the reload waits until the player closes or the
+  film ends. The service worker cache is bumped to v3 so the new
+  app code is picked up, and the old v2 cache is cleaned up on
+  activation.
+
 ## v1.2.0 - 2026-11-14
 
 - Netflix grade retouch and redesign, look only, no behavior changed.

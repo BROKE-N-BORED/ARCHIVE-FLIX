@@ -1573,6 +1573,9 @@ function finishTitle(item) {
   document.body.style.overflow = "";
   currentPlayer = null;
   playerMode = "";
+  /* An update that arrived mid-film reloads now, and the fresh page
+     loads the catalog itself, so there is no need to re-scan first. */
+  if (reloadForUpdateIfPending()) return;
   refreshPersonalViews();
   rescanCatalog();
 }
@@ -1595,6 +1598,7 @@ function closePlayer() {
   playerMode = "";
   refreshPersonalViews();
   refreshHomePersonal();
+  reloadForUpdateIfPending();
 }
 
 /* ---------- My List and History views ---------- */
@@ -1773,11 +1777,54 @@ function initPullToRefresh() {
 
 var deferredInstallPrompt = null;
 
+/* An updated service worker takes control of the page, but the page
+   itself keeps showing the old shell until it reloads, so an update
+   would sit invisible until the next manual reload. Watch for the
+   new worker and reload once so an update appears on its own.
+   Never reload while the player is open: the reload waits until the
+   player closes instead. */
+var updateReloadDone = false;
+var pendingUpdateReload = false;
+var swHadControllerAtLoad = false;
+
+function isPlayerOpen() {
+  return !!currentPlayer;
+}
+
+/* Reload once for a pending update, after the player has closed.
+   Returns true when a reload was started. */
+function reloadForUpdateIfPending() {
+  if (!pendingUpdateReload || updateReloadDone) return false;
+  pendingUpdateReload = false;
+  updateReloadDone = true;
+  window.location.reload();
+  return true;
+}
+
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   if (window.location.protocol !== "https:" &&
       window.location.hostname !== "localhost" &&
       window.location.hostname !== "127.0.0.1") return;
+  /* A page loading with no controller is a first install: the
+     controllerchange that follows is the first worker taking over,
+     not an update, so it must not reload. Remember the page now has
+     a controller, so a later update in this same session still
+     reloads. */
+  swHadControllerAtLoad = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", function () {
+    if (!swHadControllerAtLoad) {
+      swHadControllerAtLoad = true;
+      return;
+    }
+    if (updateReloadDone) return;
+    if (isPlayerOpen()) {
+      pendingUpdateReload = true;
+      return;
+    }
+    updateReloadDone = true;
+    window.location.reload();
+  });
   window.addEventListener("load", function () {
     navigator.serviceWorker.register("sw.js").catch(function () {
       /* Offline support unavailable, the app still works. */
@@ -2167,7 +2214,12 @@ if (typeof module !== "undefined" && module.exports) {
       var out = filterVisible(items);
       state = saved;
       return out;
-    }
+    },
+    /* Update reload guards, for the node smoke test. */
+    registerServiceWorker: registerServiceWorker,
+    isPlayerOpen: isPlayerOpen,
+    reloadForUpdateIfPending: reloadForUpdateIfPending,
+    setPlayerForTest: function (p) { currentPlayer = p; }
   };
 }
 
