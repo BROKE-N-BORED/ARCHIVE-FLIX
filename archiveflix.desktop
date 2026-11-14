@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=ARCHIVEFLIX
+Comment=Free movies, shows and cartoons from archive.org
+Exec=@HOME@/.local/share/archiveflix/archiveflix.sh
+Icon=@HOME@/.local/share/archiveflix/icon.svg
+Terminal=false
+Categories=AudioVideo;Video;

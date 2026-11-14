@@ -2,7 +2,14 @@
    Vanilla JS, no libraries. All personal data stays in localStorage.
    Catalog, playback and downloads come from archive.org. Titles, years and
    descriptions are the Archive's own uploader supplied metadata, shown as-is.
-   Progress is user marked: the Archive embed cannot report playback position.
+   Playback uses the Archive's own MP4 file in a native video element, so
+   your place is saved automatically as you watch and you resume exactly
+   where you left off. The Archive embed is only a fallback for titles
+   with no file this browser can play directly.
+   The catalog loads once when the app opens. It is re-scanned only on
+   pull-to-refresh on Home, on a browser refresh, on app start, or when
+   a finished title sends you back to Home. Nothing here reloads on a
+   timer, and nothing interrupts watching, searching or browsing.
 */
 
 (function () {
@@ -106,6 +113,43 @@ function formatRuntime(seconds) {
   return Math.floor(m / 60) + "h " + (m % 60) + "m";
 }
 
+/* Clock style time: 327 seconds is 5:27, 5400 is 1:30:00. */
+function formatTime(seconds) {
+  seconds = Math.max(0, Math.round(Number(seconds) || 0));
+  var h = Math.floor(seconds / 3600);
+  var m = Math.floor((seconds % 3600) / 60);
+  var s = seconds % 60;
+  var mm = h ? (m < 10 ? "0" + m : String(m)) : String(m);
+  var ss = s < 10 ? "0" + s : String(s);
+  return (h ? h + ":" + mm : mm) + ":" + ss;
+}
+
+/* Plain words for where you are in a title, from a history entry. */
+function placeText(h) {
+  if (!h || h.progress <= 0) return "Not started yet.";
+  if (h.progress >= 1) return "Finished.";
+  if (h.position > 0 && h.duration > 0) {
+    return "Resume from " + formatTime(h.position) + " of " + formatTime(h.duration) +
+      " (" + Math.round(h.progress * 100) + "%).";
+  }
+  return "Your place: " + Math.round(h.progress * 100) + "%.";
+}
+
+/* Where playback should resume, in seconds. Old history entries only
+   have a progress fraction, so those fall back to fraction times
+   duration. Finished titles start over, and a place in the last
+   seconds starts over too. */
+function resumeSeconds(entry, duration) {
+  if (!entry || entry.progress >= 1) return 0;
+  duration = Number(duration) || 0;
+  var pos = 0;
+  if (entry.position != null && Number(entry.position) > 0) pos = Number(entry.position);
+  else if (entry.progress > 0 && duration > 0) pos = entry.progress * duration;
+  if (duration > 0 && pos > duration - 15) return 0;
+  if (pos < 5) return 0;
+  return Math.floor(pos);
+}
+
 function formatDate(ts) {
   try {
     return new Date(ts).toLocaleDateString(undefined,
@@ -177,6 +221,36 @@ function pickDownloadFile(files) {
   return null;
 }
 
+/* Pick a file a browser <video> element can actually play. Same idea as
+   the download picker, but only web playable formats count: MP4 first
+   (the 512kb one when there is one), then WebM or Ogg. MKV, MPEG and
+   MOV files do not play in most phone browsers, so they are skipped. */
+function pickPlayableFile(files) {
+  files = files || [];
+  function playable(f) {
+    return f && f.name && /\.(mp4|m4v|webm|ogv)$/i.test(f.name) &&
+      Number(f.size) > 1048576;
+  }
+  var mp4s = files.filter(function (f) {
+    return playable(f) && /\.(mp4|m4v)$/i.test(f.name);
+  });
+  if (mp4s.length) {
+    var small = null;
+    mp4s.forEach(function (f) {
+      if (f.name.indexOf("512kb") !== -1) small = small || f;
+    });
+    if (small) return small;
+    mp4s.sort(function (a, b) { return Number(a.size) - Number(b.size); });
+    return mp4s[0];
+  }
+  var others = files.filter(function (f) { return playable(f); });
+  if (others.length) {
+    others.sort(function (a, b) { return Number(a.size) - Number(b.size); });
+    return others[0];
+  }
+  return null;
+}
+
 /* ---------- State (localStorage) ---------- */
 
 var memoryStore = null;
@@ -244,7 +318,11 @@ function filterVisible(items) {
   return items.filter(function (it) { return !shouldHide(it); });
 }
 
-function recordProgress(item, progress) {
+/* Position and duration are seconds. A finished title keeps its
+   duration but its position goes back to 0, so playing it again
+   starts from the beginning. Older entries without a position keep
+   working: they just have the progress fraction. */
+function recordProgress(item, progress, position, duration) {
   var prev = state.history[item.id];
   var wasFinished = !!(prev && prev.progress >= 1);
   var now = Date.now();
@@ -255,6 +333,9 @@ function recordProgress(item, progress) {
     type: item.type,
     subjects: item.subjects || (prev && prev.subjects) || [],
     progress: progress,
+    position: progress >= 1 ? 0 :
+      (position != null ? Math.round(position) : (prev ? prev.position || 0 : 0)),
+    duration: duration != null ? Math.round(duration) : (prev ? prev.duration || 0 : 0),
     lastWatchedAt: now,
     watchCount: (prev ? prev.watchCount : 0) + (progress >= 1 && !wasFinished ? 1 : 0)
   };
@@ -665,12 +746,14 @@ function renderPersonalShelves(container) {
   var cw = continueWatchingItems();
   if (cw.length) {
     var s1 = rowEl("Continue Watching", "Pick up where you left off");
+    s1.classList.add("personal-shelf");
     container.appendChild(s1);
     fillRow(s1, cw);
   }
   var wa = watchAgainItems();
   if (wa.length) {
     var s2 = rowEl("Watch Again", "Finished titles, ready for another round");
+    s2.classList.add("personal-shelf");
     container.appendChild(s2);
     fillRow(s2, wa);
   }
@@ -678,6 +761,7 @@ function renderPersonalShelves(container) {
   subjects.forEach(function (subj) {
     var label = subj.charAt(0).toUpperCase() + subj.slice(1);
     var s3 = rowEl("Because you watched " + label, "Picked from what you finished and liked");
+    s3.classList.add("personal-shelf");
     container.appendChild(s3);
     var scroll = s3.querySelector(".row-scroll");
     scroll.innerHTML = '<div class="skeleton-row"><div class="skeleton-card"></div>' +
@@ -731,6 +815,30 @@ function loadHome() {
     load();
   });
   homeLoaded = true;
+}
+
+/* Re-render just the personal shelves (Continue Watching, Watch Again,
+   Because You Watched) without touching the catalog rows. Used after
+   closing the player, so Continue Watching shows the latest place. */
+function refreshHomePersonal() {
+  var container = document.getElementById("homeRows");
+  if (!container || !homeLoaded) return;
+  var old = container.querySelectorAll(".personal-shelf");
+  Array.prototype.forEach.call(old, function (s) { s.remove(); });
+  var temp = document.createElement("div");
+  renderPersonalShelves(temp);
+  var ref = container.firstChild;
+  while (temp.firstChild) container.insertBefore(temp.firstChild, ref);
+}
+
+/* Re-scan the catalog from archive.org and show Home. This is one of
+   the only times the app reloads the catalog on its own: after a
+   title finishes, or on pull-to-refresh. It never runs while you are
+   watching, searching or browsing. */
+function rescanCatalog() {
+  searchCache = {};
+  homeLoaded = false;
+  showView("home");
 }
 
 /* ---------- Browse ---------- */
@@ -928,16 +1036,15 @@ function openDetails(item) {
         subjects.slice(0, 8).map(function (s) { return '<span class="tag">' + esc(s) + "</span>"; }).join("") +
         "</div>" : "") +
       '<div class="details-actions">' +
-      '<button class="btn btn-primary" id="dPlay">Play</button>' +
+      '<button class="btn btn-primary" id="dPlay">' +
+      (progress >= 1 ? "Watch Again" : (progress > 0 ? "Resume" : "Play")) + "</button>" +
       '<button class="btn" id="dDownload">Download' + (dl ? " (" + formatSize(dl.size) + ")" : "") + "</button>" +
       '<button class="btn" id="dList">' + (inList ? "Remove from My List" : "Add to My List") + "</button>" +
       '<button class="btn" id="dLike">' + (reaction === 1 ? "Liked" : "Like") + "</button>" +
       '<button class="btn" id="dNope">' + (reaction === -1 ? "Not for me" : "Not for me") + "</button>" +
       "</div>" +
-      '<div class="slider-row"><label for="dSlider">Your place in the film: <span id="dSliderVal">' +
-      Math.round(progress * 100) + "%</span></label>" +
-      '<input type="range" id="dSlider" min="0" max="100" value="' + Math.round(progress * 100) + '">' +
-      '<p class="sub">Move the slider to set where you are. The Archive player cannot report your place, so this is how Resume and Continue Watching know.</p></div>' +
+      '<div class="place-row"><p class="sub">' + esc(placeText(h)) +
+      " Your place is saved automatically as you watch.</p></div>" +
       "</div></div>" +
       '<h3 class="similar-head">More Like This</h3><div class="row-scroll" id="similarRow"></div>';
 
@@ -958,14 +1065,6 @@ function openDetails(item) {
     document.getElementById("dNope").addEventListener("click", function () {
       setReaction(fullItem, -1);
       openDetails(item);
-    });
-    var slider = document.getElementById("dSlider");
-    slider.addEventListener("input", function () {
-      document.getElementById("dSliderVal").textContent = slider.value + "%";
-    });
-    slider.addEventListener("change", function () {
-      recordProgress(fullItem, Number(slider.value) / 100);
-      toast(Number(slider.value) >= 100 ? "Marked as finished" : "Place saved at " + slider.value + "%");
     });
     wireExpandableDescs(body);
 
@@ -1005,27 +1104,168 @@ function closeDetails() {
 /* ---------- Player sheet ---------- */
 
 var currentPlayer = null;
+var currentVideo = null;
+var playerMode = "";
+var finishHandled = false;
+var lastSavedAt = 0;
+var lastSavedPos = -1;
+
+/* Save the video element's real position right now. */
+function saveVideoPosition() {
+  if (!currentPlayer || !currentVideo) return;
+  var dur = Number(currentVideo.duration) || 0;
+  var pos = Number(currentVideo.currentTime) || 0;
+  if (!dur) return;
+  recordProgress(currentPlayer, Math.min(1, pos / dur), pos, dur);
+  updatePlayerPlace();
+}
+
+/* Same, but at most once every 5 seconds while playing. */
+function saveVideoPositionThrottled() {
+  if (!currentVideo) return;
+  var now = Date.now();
+  var pos = Number(currentVideo.currentTime) || 0;
+  if (now - lastSavedAt < 5000 && Math.abs(pos - lastSavedPos) < 5) return;
+  lastSavedAt = now;
+  lastSavedPos = pos;
+  saveVideoPosition();
+}
+
+function updatePlayerPlace() {
+  var el = document.getElementById("playerPlace");
+  var h = currentPlayer && state.history[currentPlayer.id];
+  if (!h || h.progress <= 0) {
+    el.textContent = "Not started yet.";
+    return;
+  }
+  if (h.progress >= 1) {
+    el.textContent = "Finished.";
+    return;
+  }
+  if (h.position > 0 && h.duration > 0) {
+    el.textContent = "Your place: " + formatTime(h.position) + " of " +
+      formatTime(h.duration) + " (" + Math.round(h.progress * 100) +
+      "%). Saved automatically.";
+    return;
+  }
+  el.textContent = "Your place: " + Math.round(h.progress * 100) + "%. Saved automatically.";
+}
+
+/* Show the right note and controls for the player mode. The manual
+   percent buttons only ever appear in embed fallback mode. */
+function setPlayerMode(mode) {
+  playerMode = mode;
+  document.getElementById("playerNoteVideo").hidden = mode !== "video";
+  document.getElementById("playerNoteEmbed").hidden = mode !== "embed";
+  document.getElementById("playerManualBtns").hidden = mode !== "embed";
+  document.getElementById("playerRestartBtn").hidden = mode !== "video";
+}
 
 function openPlayer(item) {
   currentPlayer = item;
+  currentVideo = null;
+  finishHandled = false;
+  lastSavedAt = 0;
+  lastSavedPos = -1;
   document.getElementById("playerTitle").textContent = item.title +
     (item.year ? " (" + item.year + ")" : "");
   document.getElementById("playerFrame").innerHTML =
-    '<iframe src="' + embedUrl(item.id) + '" allowfullscreen allow="fullscreen"></iframe>';
-  var h = state.history[item.id];
-  document.getElementById("playerPlace").textContent = h && h.progress > 0
-    ? "Your place: " + Math.round(h.progress * 100) + "%."
-    : "Not started yet. Mark your place with the buttons below as you watch.";
+    '<p class="player-loading">Finding a playable file on archive.org...</p>';
   document.getElementById("playerSheet").hidden = false;
   document.body.style.overflow = "hidden";
+  setPlayerMode("loading");
+  updatePlayerPlace();
+  getMetadata(item.id).then(function (meta) {
+    if (!currentPlayer || currentPlayer.id !== item.id) return;
+    var file = pickPlayableFile(meta.files || []);
+    if (file) startNativePlayer(item, file);
+    else startEmbedPlayer(item);
+  }).catch(function () {
+    if (!currentPlayer || currentPlayer.id !== item.id) return;
+    startEmbedPlayer(item);
+  });
+}
+
+function startNativePlayer(item, file) {
+  var frame = document.getElementById("playerFrame");
+  var video = document.createElement("video");
+  video.controls = true;
+  video.playsInline = true;
+  video.preload = "metadata";
+  video.className = "player-video";
+  video.src = downloadUrl(item.id, file.name);
+  frame.innerHTML = "";
+  frame.appendChild(video);
+  currentVideo = video;
+  setPlayerMode("video");
+  var saved = state.history[item.id];
+  var resumed = false;
+  video.addEventListener("loadedmetadata", function () {
+    if (resumed) return;
+    resumed = true;
+    var at = resumeSeconds(saved, video.duration);
+    if (at > 0) {
+      try { video.currentTime = at; } catch (e) { /* seek failed, plays from the start */ }
+      toast("Resuming from " + formatTime(at));
+    }
+  });
+  video.addEventListener("timeupdate", saveVideoPositionThrottled);
+  video.addEventListener("pause", saveVideoPosition);
+  video.addEventListener("ended", function () { finishTitle(item); });
+  video.addEventListener("error", function () {
+    if (currentPlayer && currentPlayer.id === item.id) startEmbedPlayer(item);
+  });
+  var playPromise = null;
+  try { playPromise = video.play(); } catch (e) { playPromise = null; }
+  if (playPromise && playPromise.catch) {
+    playPromise.catch(function () { /* autoplay blocked, press play */ });
+  }
+}
+
+function startEmbedPlayer(item) {
+  currentVideo = null;
+  var frame = document.getElementById("playerFrame");
+  frame.innerHTML =
+    '<iframe src="' + embedUrl(item.id) + '" allowfullscreen allow="fullscreen"></iframe>';
+  setPlayerMode("embed");
+}
+
+/* The film ended. Mark it finished, stop everything, re-scan the
+   catalog and go back to Home. */
+function finishTitle(item) {
+  if (finishHandled) return;
+  finishHandled = true;
+  var dur = currentVideo && Number(currentVideo.duration)
+    ? Math.round(Number(currentVideo.duration)) : 0;
+  recordProgress(item, 1, 0, dur);
+  toast("Finished. Back to Home.");
+  stopPlayback();
+  document.getElementById("playerSheet").hidden = true;
+  document.body.style.overflow = "";
+  currentPlayer = null;
+  playerMode = "";
+  refreshPersonalViews();
+  rescanCatalog();
+}
+
+function stopPlayback() {
+  if (currentVideo) {
+    try { currentVideo.pause(); } catch (e) { /* already stopped */ }
+    try { currentVideo.removeAttribute("src"); currentVideo.load(); } catch (e) { /* ignore */ }
+    currentVideo = null;
+  }
+  document.getElementById("playerFrame").innerHTML = "";
 }
 
 function closePlayer() {
+  saveVideoPosition();
+  stopPlayback();
   document.getElementById("playerSheet").hidden = true;
-  document.getElementById("playerFrame").innerHTML = "";
   document.body.style.overflow = "";
   currentPlayer = null;
+  playerMode = "";
   refreshPersonalViews();
+  refreshHomePersonal();
 }
 
 /* ---------- My List and History views ---------- */
@@ -1053,7 +1293,7 @@ function renderHistory() {
   var entries = Object.keys(state.history).map(function (id) { return state.history[id]; })
     .sort(function (a, b) { return b.lastWatchedAt - a.lastWatchedAt; });
   if (!entries.length) {
-    list.innerHTML = '<div class="empty-state">No history yet. Play something and mark your place, and it shows up here.</div>';
+    list.innerHTML = '<div class="empty-state">No history yet. Play something and it shows up here.</div>';
     return;
   }
   entries.forEach(function (h) {
@@ -1067,7 +1307,7 @@ function renderHistory() {
         formatDate(h.lastWatchedAt), h.watchCount ? "Watched " + h.watchCount + " time" + (h.watchCount === 1 ? "" : "s") : ""]
         .filter(Boolean).join(" · ")) + "</div>" +
       '<div class="progress-track"><div class="progress-fill" style="width:' + Math.round(h.progress * 100) + '%"></div></div>' +
-      '<div class="card-meta">' + (h.progress >= 1 ? "Finished" : Math.round(h.progress * 100) + "% watched") + "</div></div>" +
+      '<div class="card-meta">' + esc(placeText(h).replace(/\.$/, "")) + "</div></div>" +
       '<div class="history-btns">' +
       '<button class="btn small btn-primary" data-act="play">' + (h.progress >= 1 ? "Watch Again" : "Resume") + "</button>" +
       '<button class="btn small" data-act="details">Details</button>' +
@@ -1145,6 +1385,86 @@ function showView(name) {
   if (name === "settings") renderThemePresets();
 }
 
+/* ---------- Pull to refresh (Home only) ---------- */
+
+/* Drag down from the very top of Home, release past the threshold,
+   and the catalog re-scans. This is the only gesture that reloads
+   the catalog. It does nothing while a sheet is open, while you are
+   scrolled down, or on any view but Home. */
+function initPullToRefresh() {
+  var indicator = document.getElementById("ptrIndicator");
+  var startY = 0;
+  var pulling = false;
+  var THRESHOLD = 90;
+  document.addEventListener("touchstart", function (e) {
+    if (!document.getElementById("homeView").classList.contains("active")) return;
+    if (!document.getElementById("playerSheet").hidden) return;
+    if (!document.getElementById("detailsSheet").hidden) return;
+    if (window.scrollY > 0) return;
+    if (e.touches.length !== 1) return;
+    startY = e.touches[0].clientY;
+    pulling = true;
+  }, { passive: true });
+  document.addEventListener("touchmove", function (e) {
+    if (!pulling) return;
+    var dy = e.touches[0].clientY - startY;
+    if (dy <= 0) {
+      indicator.classList.remove("visible", "ready");
+      return;
+    }
+    if (dy > 10) indicator.classList.add("visible");
+    var ready = dy >= THRESHOLD;
+    indicator.classList.toggle("ready", ready);
+    indicator.textContent = ready ? "Release to refresh" : "Pull to refresh";
+  }, { passive: true });
+  document.addEventListener("touchend", function () {
+    if (!pulling) return;
+    pulling = false;
+    var ready = indicator.classList.contains("ready");
+    indicator.classList.remove("visible", "ready");
+    if (ready) {
+      toast("Refreshing the catalog...");
+      rescanCatalog();
+    }
+  });
+}
+
+/* ---------- Installable app (PWA) ---------- */
+
+var deferredInstallPrompt = null;
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  if (window.location.protocol !== "https:" &&
+      window.location.hostname !== "localhost" &&
+      window.location.hostname !== "127.0.0.1") return;
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("sw.js").catch(function () {
+      /* Offline support unavailable, the app still works. */
+    });
+  });
+}
+
+function initInstallPrompt() {
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    var btn = document.getElementById("installBtn");
+    if (btn) btn.hidden = false;
+  });
+  var btn = document.getElementById("installBtn");
+  if (btn) {
+    btn.addEventListener("click", function () {
+      if (!deferredInstallPrompt) return;
+      deferredInstallPrompt.prompt();
+      deferredInstallPrompt.userChoice.then(function () {
+        deferredInstallPrompt = null;
+        btn.hidden = true;
+      }).catch(function () { /* prompt dismissed */ });
+    });
+  }
+}
+
 /* ---------- Init ---------- */
 
 function syncHideWatchedBoxes() {
@@ -1181,6 +1501,21 @@ function init() {
   renderThemePresets();
   populateYearSelects();
   syncHideWatchedBoxes();
+  initPullToRefresh();
+  registerServiceWorker();
+  initInstallPrompt();
+
+  /* Save your place if the app is hidden or closed mid-film. */
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) saveVideoPosition();
+  });
+  window.addEventListener("pagehide", saveVideoPosition);
+  window.addEventListener("offline", function () {
+    toast("You are offline. Saved pages still open, the catalog needs internet.");
+  });
+  window.addEventListener("online", function () {
+    toast("Back online.");
+  });
 
   var resizeTimer = null;
   window.addEventListener("resize", function () {
@@ -1307,15 +1642,24 @@ function init() {
     if (!document.getElementById("playerSheet").hidden) closePlayer();
     else if (!document.getElementById("detailsSheet").hidden) closeDetails();
   });
+  /* Manual place buttons. They only show in embed fallback mode, where
+     the Archive player cannot report your place. Native playback
+     saves your place on its own. */
   document.querySelectorAll(".progress-btns .btn").forEach(function (b) {
     b.addEventListener("click", function () {
       if (!currentPlayer) return;
       var p = Number(b.dataset.progress);
       recordProgress(currentPlayer, p);
-      document.getElementById("playerPlace").textContent =
-        p >= 1 ? "Marked as finished." : "Your place: " + Math.round(p * 100) + "%.";
+      updatePlayerPlace();
       toast(p >= 1 ? "Marked as finished" : "Place saved at " + Math.round(p * 100) + "%");
     });
+  });
+  document.getElementById("playerRestartBtn").addEventListener("click", function () {
+    if (!currentVideo || !currentPlayer) return;
+    try { currentVideo.currentTime = 0; } catch (e) { /* seek failed */ }
+    recordProgress(currentPlayer, 0, 0, Number(currentVideo.duration) || 0);
+    updatePlayerPlace();
+    toast("Started from the beginning");
   });
 
   document.getElementById("accentPicker").addEventListener("input", function (e) {
@@ -1419,6 +1763,10 @@ if (typeof document !== "undefined" && document.getElementById &&
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     pickDownloadFile: pickDownloadFile,
+    pickPlayableFile: pickPlayableFile,
+    resumeSeconds: resumeSeconds,
+    formatTime: formatTime,
+    placeText: placeText,
     posterUrl: posterUrl,
     embedUrl: embedUrl,
     downloadUrl: downloadUrl,

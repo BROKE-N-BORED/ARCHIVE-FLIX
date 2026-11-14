@@ -5,9 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ARCHIVEFLIX - Movies, Shows and Cartoons</title>
 <meta name="description" content="ARCHIVEFLIX is a streaming style home screen for free movies, shows and cartoons from archive.org, with watch history, My List and recommendations.">
+<meta name="theme-color" content="#141414">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ARCHIVEFLIX">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="icons/icon-192.svg">
+<link rel="apple-touch-icon" href="icons/icon-192.svg">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<div id="ptrIndicator" class="ptr-indicator" aria-hidden="true"></div>
 <header class="topbar">
   <div class="topbar-inner">
     <button class="wordmark" id="homeBtn" aria-label="ARCHIVEFLIX home">ARCHIVE<span>FLIX</span></button>
@@ -174,6 +183,13 @@
     </div>
     <p class="sub">Get a free key at omdbapi.com/apikey.aspx, then paste it here.</p>
 
+    <h2 class="section-title">Install this app</h2>
+    <p class="sub">Put ARCHIVEFLIX on your home screen and it opens like a real app, full screen, with its own icon. No app store and no terminal needed.</p>
+    <div class="key-row">
+      <button class="btn btn-primary" id="installBtn" hidden>Install ARCHIVEFLIX</button>
+    </div>
+    <p class="sub">On an Android phone: open this page in Chrome, tap the three dot menu, then Add to Home screen. On an iPhone: open this page in Safari, tap Share, then Add to Home Screen. The Install button above appears when your browser offers it.</p>
+
     <h2 class="section-title">Your data</h2>
     <p class="sub">History, My List, likes and settings live in this browser only. Export a backup to move them to another browser or device.</p>
     <div class="key-row">
@@ -185,7 +201,7 @@
     </div>
 
     <h2 class="section-title">About this app</h2>
-    <p class="sub">ARCHIVEFLIX is a free, open home screen for the public catalog at archive.org. It plays titles through the Archive's own player and links downloads from the Archive's own files. Progress is marked by you, because the Archive player cannot report where you are in a film.</p>
+    <p class="sub">ARCHIVEFLIX is a free, open home screen for the public catalog at archive.org. It plays the Archive's own video files right in the app and saves your place automatically as you watch, so you pick up where you left off. Downloads link to the Archive's own files. A few titles have no file this browser can play directly; those play through the Archive's own player instead.</p>
   </section>
 </main>
 
@@ -203,12 +219,16 @@
     <button class="sheet-close" id="playerClose" aria-label="Close player">Close</button>
     <h2 id="playerTitle" class="player-title"></h2>
     <div id="playerFrame" class="player-frame"></div>
-    <p class="sub player-note">The Archive player cannot report where you are, so mark your own place here. It powers Continue Watching and Resume.</p>
-    <div class="progress-btns">
+    <p class="sub player-note" id="playerNoteVideo" hidden>Your place is saved automatically as you watch, and you pick up right where you left off. When the film ends it is marked finished for you.</p>
+    <p class="sub player-note" id="playerNoteEmbed" hidden>This title has no file this browser can play directly, so it plays through the Archive player, which cannot report where you are. Mark your place with the buttons below.</p>
+    <div class="progress-btns" id="playerManualBtns" hidden>
       <button class="btn btn-ghost" data-progress="0.25">25% watched</button>
       <button class="btn btn-ghost" data-progress="0.5">50% watched</button>
       <button class="btn btn-ghost" data-progress="0.75">75% watched</button>
       <button class="btn btn-primary" data-progress="1">Finished</button>
+    </div>
+    <div class="video-actions">
+      <button class="btn btn-ghost small" id="playerRestartBtn" hidden>Start from the beginning</button>
     </div>
     <p id="playerPlace" class="player-place" aria-live="polite"></p>
   </div>

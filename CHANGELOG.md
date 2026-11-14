@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## v1.1.0 - 2026-11-14
+
+- No more reloads on their own. The catalog loads once when the app
+  opens and re-scans only when you pull down to refresh on Home,
+  refresh the page, restart the app, or finish a title and go back to
+  Home. Nothing reloads on a timer, and nothing interrupts watching,
+  searching or browsing.
+- Real Netflix style resume. The player now plays the Archive's own
+  MP4 file in a native video element and saves your place
+  automatically as you watch, so reopening a title picks up exactly
+  where you left off. Reaching the end marks it finished, stops
+  playback, re-scans the catalog and takes you back to Home. The
+  manual 25, 50, 75 and Finished buttons are gone, except for the
+  few titles with no playable file, which still play through the
+  Archive embed with a simple manual place marker. The details
+  sheet shows your saved place instead of a slider.
+- Installable web app. Add manifest.json, a service worker (caches
+  the app shell, runtime caches posters with a cap, friendly offline
+  behavior) and SVG icons, so the app installs from a plain link:
+  open it on your phone, Add to Home Screen, tap the icon. No build
+  step, no terminal, no dependencies.
+- Linux desktop installer. Double-click "Install ARCHIVEFLIX" (or
+  run `bash install.sh`) to install the app to
+  ~/.local/share/archiveflix with a desktop icon and app menu entry.
+  The launcher opens the app in the browser in app mode when a
+  Chromium browser is available, plain window otherwise, with no
+  terminal window. The installer verifies the icon file exists
+  before reporting success.
+
 ## v1.0.2 - 2026-11-14
 
 - Browse gains a year filter next to the decade filter: pick a single

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Install ARCHIVEFLIX
+Comment=Install ARCHIVEFLIX on this computer (no terminal needed)
+Exec=python3 -c "import os,subprocess,sys; p=sys.argv[1] if len(sys.argv)>1 else ''; p=p[7:] if p.startswith('file://') else p; d=os.path.dirname(p) if p else os.getcwd(); subprocess.call(['bash', os.path.join(d, 'install.sh')])" %k
+Icon=system-software-install
+Terminal=true
+Categories=Utility;

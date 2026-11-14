@@ -16,16 +16,22 @@ saved only in your browser.
   sub-genre chips, decade, year (single year or From/To range), minimum
   rating and six sort orders.
 - Details for every title: synopsis, director, year, runtime, Archive star
-  rating, subject tags, More Like This, a Download button and a progress
-  slider for your place in the film.
-- Player sheet using the Archive's own embed. Progress is marked by you
-  (25, 50, 75 percent or Finished), because the Archive player cannot
-  report where you are.
+  rating, subject tags, More Like This, a Download button, and your saved
+  place in the film.
+- Player plays the Archive's own video file right in the app and saves
+  your place automatically as you watch, so you pick up exactly where
+  you left off. When a film ends it is marked finished for you and you
+  go back to a freshly scanned Home. A few titles have no file this
+  browser can play directly; those play through the Archive's own
+  player instead, with a simple manual place marker.
 - Download button: resolves a video file from the Archive's own files and
   links it. If no file resolves, it opens the title's Archive page instead.
 - Watch history with dates and play counts, Continue Watching with progress
   bars, a Watch Again shelf, My List, Like and Not for me, and Because You
   Watched rows built from what you finished and liked.
+- The catalog loads once when the app opens and never reloads on its own.
+  It re-scans only when you pull down to refresh on Home, refresh the
+  page, restart the app, or finish a title and go back to Home.
 - Hide watched toggle: finished titles drop out of every browse row and
   search result. Your own shelves (Continue Watching, Watch Again, My List,
   History) still show them, since that is what they are for.
@@ -45,6 +51,32 @@ the main branch) and open the Pages link.
 
 It needs internet access to reach archive.org. It is plain HTML, CSS and
 JavaScript with no build step and no libraries.
+
+## Install it on your phone
+
+No app store and no terminal needed.
+
+1. Open the app link (the GitHub Pages link) on your phone.
+2. On Android, in Chrome: tap the three dot menu, then Add to Home screen.
+   On iPhone, in Safari: tap Share, then Add to Home Screen. Some browsers
+   also show an Install button in Settings.
+3. Tap the ARCHIVEFLIX icon on your home screen. It opens full screen
+   like a real app, with your history saved on the phone.
+
+## Install it on a Linux desktop
+
+1. Download this repo (Code, Download ZIP, then open the zip) or clone it.
+2. Double-click "Install ARCHIVEFLIX". If double-clicking opens a text
+   editor instead, right-click the file, open Properties, Permissions,
+   check "Allow this file to run as a program", then double-click it
+   again. Or open a terminal in the folder and run `bash install.sh`.
+3. Click the ARCHIVEFLIX icon on your desktop (or in the app menu). It
+   opens in its own window, no terminal involved. If double-clicking the
+   desktop icon does nothing, right-click it and choose Allow Launching.
+
+The installer puts the app in `~/.local/share/archiveflix`, the icon in
+the app menu and on the desktop, and checks the icon file is really
+there before it says it worked.
 
 ## Where the catalog comes from
 
@@ -68,12 +100,15 @@ omdbapi.com. Get a free key at omdbapi.com/apikey.aspx.
 History, My List, likes, theme and the optional OMDb key live in your
 browser's local storage. Nothing is sent to any server except archive.org
 (for the catalog, playback and downloads) and omdbapi.com (only when you
-saved a key, only for IMDb ratings).
+saved a key, only for IMDb ratings). The service worker keeps a copy of
+the app itself and a capped set of posters on your device so the app
+opens offline; it never stores your history or your key.
 
 ## Honest limits
 
-- Playback position cannot be read from the Archive embed, so progress is
-  user marked. That is stated in the player and on the details slider.
+- A few titles have no file a browser can play directly, so they play
+  through the Archive embed, which cannot report your place. Those few
+  keep a simple manual place marker in the player.
 - Archive metadata is uploader supplied. Some titles, years and synopses
   are messy or missing, and a few uploads are mislabeled. The app shows
   what the Archive returns.
