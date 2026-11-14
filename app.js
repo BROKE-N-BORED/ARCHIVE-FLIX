@@ -2365,6 +2365,16 @@ function renderProfileList() {
       if (locked) openPinSheet({ mode: "verify", profileId: p.id, allowCancel: true, onSuccess: fn });
       else fn();
     }
+    if (!isActive) {
+      var switchBtn = document.createElement("button");
+      switchBtn.className = "btn small btn-primary";
+      switchBtn.textContent = "Switch";
+      switchBtn.addEventListener("click", function () {
+        if (locked) openPinSheet({ mode: "unlock", profileId: p.id, allowCancel: true });
+        else enterProfile(p.id);
+      });
+      btns.appendChild(switchBtn);
+    }
     var renameBtn = document.createElement("button");
     renameBtn.className = "btn small";
     renameBtn.textContent = "Rename";
