@@ -1,0 +1,26 @@
+# Secrets and local config never go in the repo.
+.env
+.env.*
+*.env
+*.key
+*.pem
+*.p12
+*.pfx
+*.keystore
+id_rsa*
+providers.json
+connectors.json
+vault.json
+vault.key
+credentials*
+*credentials*.json
+*secret*.json
+local-config.json
+config.local.*
+.netrc
+
+# Editor and OS leftovers
+.DS_Store
+Thumbs.db
+*.swp
+*~

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="flix">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ARCHIVEFLIX - Movies, Shows and Cartoons</title>
+<meta name="description" content="ARCHIVEFLIX is a streaming style home screen for free movies, shows and cartoons from archive.org, with watch history, My List and recommendations.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <button class="wordmark" id="homeBtn" aria-label="ARCHIVEFLIX home">ARCHIVE<span>FLIX</span></button>
+    <nav class="mainnav" aria-label="Main">
+      <button class="navbtn active" data-view="home">Home</button>
+      <button class="navbtn" data-view="browse">Browse</button>
+      <button class="navbtn" data-view="mylist">My List</button>
+      <button class="navbtn" data-view="history">History</button>
+    </nav>
+    <div class="topbar-right">
+      <label class="hidewatched">
+        <input type="checkbox" id="hideWatchedTop">
+        <span>Hide watched</span>
+      </label>
+      <button class="iconbtn" id="settingsBtn" aria-label="Settings">Settings</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- HOME -->
+  <section id="homeView" class="view active" aria-label="Home">
+    <div id="hero" class="hero" aria-live="polite"></div>
+    <div id="homeRows" class="rows"></div>
+    <p class="source-note">Catalog and playback come from archive.org. Titles, years and descriptions are the Archive's own uploader supplied metadata, shown as-is.</p>
+  </section>
+
+  <!-- BROWSE -->
+  <section id="browseView" class="view" aria-label="Browse">
+    <div class="browse-head">
+      <h1>Browse</h1>
+      <p class="sub">Search the Archive catalog. Filters stack, so combine them.</p>
+    </div>
+    <div class="filters">
+      <input type="search" id="searchInput" placeholder="Search titles" aria-label="Search titles" autocomplete="off">
+      <div class="filter-row">
+        <label>Type
+          <select id="filterType">
+            <option value="all">Movies, shows and cartoons</option>
+            <option value="movie">Movies</option>
+            <option value="show">Shows</option>
+            <option value="cartoon">Cartoons</option>
+          </select>
+        </label>
+        <label>Genre
+          <select id="filterGenre">
+            <option value="">All genres</option>
+            <option value="horror">Horror</option>
+            <option value="comedy">Comedy</option>
+            <option value="scifi">Sci-Fi</option>
+            <option value="thriller">Thriller</option>
+            <option value="mystery">Mystery</option>
+            <option value="noir">Film Noir</option>
+            <option value="western">Western</option>
+            <option value="drama">Drama</option>
+          </select>
+        </label>
+        <label>Decade
+          <select id="filterDecade">
+            <option value="">Any decade</option>
+            <option value="1890-1929">Silent era (before 1930)</option>
+            <option value="1930-1939">1930s</option>
+            <option value="1940-1949">1940s</option>
+            <option value="1950-1959">1950s</option>
+            <option value="1960-1969">1960s</option>
+            <option value="1970-1979">1970s</option>
+            <option value="1980-1989">1980s</option>
+            <option value="1990-1999">1990s</option>
+            <option value="2000-2026">2000s and later</option>
+          </select>
+        </label>
+        <label>Minimum rating
+          <select id="filterRating">
+            <option value="0">Any rating</option>
+            <option value="3">3 stars and up</option>
+            <option value="3.5">3.5 stars and up</option>
+            <option value="4">4 stars and up</option>
+            <option value="4.5">4.5 stars and up</option>
+          </select>
+        </label>
+        <label>Sort
+          <select id="filterSort">
+            <option value="trending">Trending</option>
+            <option value="rated">Top rated</option>
+            <option value="newest">Newly added</option>
+            <option value="az">Title A to Z</option>
+            <option value="year-desc">Year, newest first</option>
+            <option value="year-asc">Year, oldest first</option>
+          </select>
+        </label>
+      </div>
+      <div id="subGenreChips" class="chips" aria-label="Sub-genres"></div>
+      <div class="filter-row filter-row-end">
+        <label class="hidewatched">
+          <input type="checkbox" id="hideWatchedBrowse">
+          <span>Hide what I have watched</span>
+        </label>
+        <button class="btn btn-ghost" id="clearFilters">Clear filters</button>
+      </div>
+    </div>
+    <p id="browseCount" class="browse-count" aria-live="polite"></p>
+    <div id="browseGrid" class="grid"></div>
+    <div class="loadmore-wrap">
+      <button class="btn btn-primary" id="loadMoreBtn">Load more</button>
+    </div>
+  </section>
+
+  <!-- MY LIST -->
+  <section id="myListView" class="view" aria-label="My List">
+    <div class="browse-head">
+      <h1>My List</h1>
+      <p class="sub">Titles you saved for later. Tap a title to open it, or remove it from its details sheet.</p>
+    </div>
+    <div id="myListGrid" class="grid"></div>
+  </section>
+
+  <!-- HISTORY -->
+  <section id="historyView" class="view" aria-label="History">
+    <div class="browse-head">
+      <h1>History</h1>
+      <p class="sub">Everything you have started or finished, newest first.</p>
+    </div>
+    <div class="history-actions">
+      <button class="btn btn-ghost" id="clearHistoryBtn">Clear all history</button>
+    </div>
+    <div id="historyList" class="history-list"></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="settingsView" class="view" aria-label="Settings">
+    <div class="browse-head">
+      <h1>Settings</h1>
+      <p class="sub">Make it yours. Everything here is saved only in this browser.</p>
+    </div>
+
+    <h2 class="section-title">Theme</h2>
+    <div id="themePresets" class="theme-grid"></div>
+    <label class="accent-row">Custom accent color
+      <input type="color" id="accentPicker" value="#e50914" aria-label="Custom accent color">
+      <button class="btn btn-ghost" id="accentClear">Use theme color</button>
+    </label>
+
+    <h2 class="section-title">IMDb ratings (optional)</h2>
+    <p class="sub">The Top IMDb row uses real IMDb ratings only when you add a free OMDb key. The key stays in this browser and is never sent anywhere except omdbapi.com. Without a key, that row falls back to Archive ratings and says so.</p>
+    <div class="key-row">
+      <input type="password" id="omdbKeyInput" placeholder="Free OMDb API key" aria-label="OMDb API key" autocomplete="off">
+      <button class="btn btn-primary" id="omdbSave">Save key</button>
+      <button class="btn btn-ghost" id="omdbClear">Remove key</button>
+    </div>
+    <p class="sub">Get a free key at omdbapi.com/apikey.aspx, then paste it here.</p>
+
+    <h2 class="section-title">Your data</h2>
+    <p class="sub">History, My List, likes and settings live in this browser only. Export a backup to move them to another browser or device.</p>
+    <div class="key-row">
+      <button class="btn btn-primary" id="exportBtn">Export my data</button>
+      <label class="btn btn-ghost filebtn">Import my data
+        <input type="file" id="importFile" accept="application/json" hidden>
+      </label>
+      <button class="btn btn-danger" id="wipeBtn">Erase everything</button>
+    </div>
+
+    <h2 class="section-title">About this app</h2>
+    <p class="sub">ARCHIVEFLIX is a free, open home screen for the public catalog at archive.org. It plays titles through the Archive's own player and links downloads from the Archive's own files. Progress is marked by you, because the Archive player cannot report where you are in a film.</p>
+  </section>
+</main>
+
+<!-- DETAILS SHEET -->
+<div id="detailsSheet" class="sheet-backdrop" hidden>
+  <div class="sheet details-sheet" role="dialog" aria-modal="true" aria-label="Title details">
+    <button class="sheet-close" id="detailsClose" aria-label="Close details">Close</button>
+    <div id="detailsBody" class="details-body"></div>
+  </div>
+</div>
+
+<!-- PLAYER SHEET -->
+<div id="playerSheet" class="sheet-backdrop" hidden>
+  <div class="sheet player-sheet" role="dialog" aria-modal="true" aria-label="Player">
+    <button class="sheet-close" id="playerClose" aria-label="Close player">Close</button>
+    <h2 id="playerTitle" class="player-title"></h2>
+    <div id="playerFrame" class="player-frame"></div>
+    <p class="sub player-note">The Archive player cannot report where you are, so mark your own place here. It powers Continue Watching and Resume.</p>
+    <div class="progress-btns">
+      <button class="btn btn-ghost" data-progress="0.25">25% watched</button>
+      <button class="btn btn-ghost" data-progress="0.5">50% watched</button>
+      <button class="btn btn-ghost" data-progress="0.75">75% watched</button>
+      <button class="btn btn-primary" data-progress="1">Finished</button>
+    </div>
+    <p id="playerPlace" class="player-place" aria-live="polite"></p>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
