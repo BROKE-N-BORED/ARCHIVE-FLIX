@@ -41,6 +41,12 @@ saved only in your browser.
   theme, with an optional 4 digit PIN lock per profile. A PIN is a
   casual lock screen for the device, not encryption. API keys are
   shared across profiles on the device.
+- A private 18+ section, hidden by default. Turning it on for a
+  profile needs an 18 or older confirmation and a profile PIN, and
+  opening it asks for the PIN again. It holds the Archive's adult
+  tagged feature films (107 titles), with its own Continue Watching,
+  Watch Again and My List. Adult titles never appear in the normal
+  rows, Browse, search, recommendations or any other profile.
 - Export and import your data as a JSON backup from Settings. A backup
   includes all profiles.
 

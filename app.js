@@ -25,9 +25,54 @@ var MAX_PROFILES = 5;
 var PROFILE_COLORS = ["#f0b429", "#3b82f6", "#22c55e", "#a855f7", "#ef4444"];
 /* Fields that belong to one profile. API keys and the OMDb ratings
    cache stay device level, shared across profiles. */
-var PROFILE_FIELDS = ["history", "myList", "reactions", "hideWatched", "theme", "customAccent"];
+var PROFILE_FIELDS = ["history", "myList", "reactions", "hideWatched", "theme", "customAccent", "adultEnabled"];
 var DEVICE_FIELDS = ["omdbKey", "omdbCache", "tmdbKey"];
 var ROW_SIZE = 24;
+
+/* Adult 18+ section. The Archive's own subject tags decide what is
+   adult. These eight subjects, inside feature_films, are the whole
+   18+ catalog: 107 titles, verified live 2026-11-14. One shared
+   definition drives both sides: ADULT_QUERY is what the 18+ section
+   includes, and ADULT_EXCLUDE (NOT the same query) is what every
+   normal catalog query appends, so a title can never be in the
+   section and still show up in normal search. "sex comedy" is in
+   the set because a second, untagged upload of Madame and Her
+   Niece (1969) carried only Sex Comedy tags and would otherwise
+   have surfaced in the normal catalog. */
+var ADULT_SUBJECTS = ["adult", "erotica", "erotic", "sexploitation",
+  "softcore", "nudie", "adults only", "sex comedy"];
+var ADULT_QUERY = 'subject:(adult OR erotica OR erotic OR sexploitation OR softcore OR nudie OR "adults only" OR "sex comedy")';
+var ADULT_EXCLUDE = "NOT " + ADULT_QUERY;
+
+/* True when an item (search result, history entry, My List entry)
+   is an adult title: its stored flag, or one of its subjects. A
+   subject matches when it contains an adult phrase, the way the
+   Archive's own search matches tokens and phrases, so compound
+   tags like "German Sex Comedy" count too. */
+function isAdultItem(item) {
+  if (!item) return false;
+  if (item.adult) return true;
+  var subs = item.subjects || [];
+  for (var i = 0; i < subs.length; i++) {
+    var s = String(subs[i]).toLowerCase();
+    for (var j = 0; j < ADULT_SUBJECTS.length; j++) {
+      if (s.indexOf(ADULT_SUBJECTS[j]) !== -1) return true;
+    }
+  }
+  return false;
+}
+
+/* A history entry is adult when it was recorded as one, or when its
+   stored subjects say so. */
+function isAdultEntry(h) {
+  return !!(h && (h.adult || isAdultItem(h)));
+}
+
+/* The normal catalog never includes adult titles. Appended to every
+   query that is not the 18+ section's own. */
+function applyAdultExclusion(query) {
+  return query + " AND " + ADULT_EXCLUDE;
+}
 
 /* Items that are playlists or collection pages, not films. Skip them. */
 var PLAYLIST_BLOCKLIST = ["SciFi_Horror", "Comedy_Films", "silent_films",
@@ -293,7 +338,8 @@ function defaultProfileData() {
     reactions: {},
     hideWatched: false,
     theme: "flix",
-    customAccent: ""
+    customAccent: "",
+    adultEnabled: false
   };
 }
 
@@ -323,6 +369,7 @@ function sanitizeProfileData(d) {
   if (typeof out.hideWatched !== "boolean") out.hideWatched = false;
   if (typeof out.theme !== "string" || !out.theme) out.theme = "flix";
   if (typeof out.customAccent !== "string") out.customAccent = "";
+  if (typeof out.adultEnabled !== "boolean") out.adultEnabled = false;
   return out;
 }
 
@@ -703,6 +750,7 @@ function recordProgress(item, progress, position, duration) {
     year: item.year,
     type: item.type,
     subjects: item.subjects || (prev && prev.subjects) || [],
+    adult: isAdultItem(item) || !!(prev && prev.adult),
     progress: progress,
     position: progress >= 1 ? 0 :
       (position != null ? Math.round(position) : (prev ? prev.position || 0 : 0)),
@@ -716,7 +764,8 @@ function recordProgress(item, progress, position, duration) {
 function toggleMyList(item) {
   var i = state.myList.findIndex(function (m) { return m.id === item.id; });
   if (i === -1) {
-    state.myList.unshift({ id: item.id, title: item.title, year: item.year, type: item.type });
+    state.myList.unshift({ id: item.id, title: item.title, year: item.year, type: item.type,
+      adult: isAdultItem(item) });
     toast("Saved to My List");
   } else {
     state.myList.splice(i, 1);
@@ -759,17 +808,25 @@ function searchUrl(query, opts) {
   return API + "?" + p.toString();
 }
 
+/* The one choke point for catalog searches. Adult titles are
+   excluded at the query level unless the caller passes
+   allowAdult (only the 18+ section does), and the results are
+   filtered client side too, so a query syntax quirk can never leak
+   an adult title into the normal catalog. */
 function searchArchive(query, opts) {
   opts = opts || {};
-  var key = query + "|" + (opts.rows || ROW_SIZE) + "|" + (opts.sort || "") + "|" + (opts.start || 0);
+  var q = opts.allowAdult ? query : applyAdultExclusion(query);
+  var key = q + "|" + (opts.rows || ROW_SIZE) + "|" + (opts.sort || "") + "|" + (opts.start || 0);
   if (searchCache[key]) return Promise.resolve(searchCache[key]);
-  return fetch(searchUrl(query, opts)).then(function (res) {
+  return fetch(searchUrl(q, opts)).then(function (res) {
     if (!res.ok) throw new Error("Archive search failed: " + res.status);
     return res.json();
   }).then(function (json) {
     var docs = ((json.response || {}).docs || []).map(function (d) {
       return normalizeDoc(d, opts.type);
-    }).filter(function (it) { return it.id && !isBlocked(it.id); });
+    }).filter(function (it) {
+      return it.id && !isBlocked(it.id) && (opts.allowAdult || !isAdultItem(it));
+    });
     var out = { total: (json.response || {}).numFound || 0, items: docs };
     searchCache[key] = out;
     return out;
@@ -1467,7 +1524,8 @@ function loadRow(def) {
   if (def.special === "directors") return loadDirectors();
   if (def.special === "cartoons") return loadCartoons();
   if (def.special === "imdb") return loadTopImdb();
-  return searchArchive(def.q, { rows: def.rows || 30, sort: def.sort, type: def.type })
+  return searchArchive(def.q, { rows: def.rows || 30, sort: def.sort, type: def.type,
+      allowAdult: !!def.allowAdult })
     .then(function (res) {
       var items = res.items;
       if (def.noYoutube) items = items.filter(function (it) { return !isYoutubeRip(it.id); });
@@ -1582,9 +1640,14 @@ function renderHero(item) {
   wireExpandableDescs(hero);
 }
 
-function continueWatchingItems() {
+/* Home shelves show only non-adult titles. The 18+ section calls
+   these with adultOnly true and gets only the adult ones, so adult
+   viewing never surfaces on Home. */
+function continueWatchingItems(adultOnly) {
   return Object.keys(state.history).map(function (id) { return state.history[id]; })
-    .filter(function (h) { return h.progress > 0 && h.progress < 1; })
+    .filter(function (h) {
+      return h.progress > 0 && h.progress < 1 && isAdultEntry(h) === !!adultOnly;
+    })
     .sort(function (a, b) { return b.lastWatchedAt - a.lastWatchedAt; })
     .map(function (h) {
       return { id: h.id, title: h.title, year: h.year, type: h.type,
@@ -1592,9 +1655,11 @@ function continueWatchingItems() {
     });
 }
 
-function watchAgainItems() {
+function watchAgainItems(adultOnly) {
   return Object.keys(state.history).map(function (id) { return state.history[id]; })
-    .filter(function (h) { return h.progress >= 1; })
+    .filter(function (h) {
+      return h.progress >= 1 && isAdultEntry(h) === !!adultOnly;
+    })
     .sort(function (a, b) { return b.lastWatchedAt - a.lastWatchedAt; })
     .map(function (h) {
       return { id: h.id, title: h.title, year: h.year, type: h.type,
@@ -1607,6 +1672,7 @@ function topSignalSubjects() {
   Object.keys(state.history).forEach(function (id) {
     var h = state.history[id];
     if (h.progress < 1) return;
+    if (isAdultEntry(h)) return;
     (h.subjects || []).forEach(function (s) {
       var k = s.toLowerCase();
       counts[k] = (counts[k] || 0) + 1;
@@ -1615,6 +1681,7 @@ function topSignalSubjects() {
   Object.keys(state.reactions).forEach(function (id) {
     var r = state.reactions[id];
     if (r.value !== 1) return;
+    if (isAdultItem(r)) return;
     (r.subjects || []).forEach(function (s) {
       var k = s.toLowerCase();
       counts[k] = (counts[k] || 0) + 2;
@@ -1909,6 +1976,17 @@ function openDetails(item) {
       rating: item.rating, downloads: item.downloads
     };
 
+    /* Keep the stored My List entry honest: an adult title opened
+       here gets flagged, so it only ever shows inside the 18+
+       section, even if it was saved before the section existed. */
+    if (isAdultItem(fullItem)) {
+      var flagged = false;
+      state.myList.forEach(function (m) {
+        if (m.id === fullItem.id && !m.adult) { m.adult = true; flagged = true; }
+      });
+      if (flagged) saveState();
+    }
+
     body.innerHTML =
       '<div class="details-top">' +
       '<div class="details-poster-wrap"><div class="title-card">' + titleCardHtml(item) + "</div>" +
@@ -1962,9 +2040,14 @@ function openDetails(item) {
 
     var similarRow = document.getElementById("similarRow");
     var topSub = subjects[0];
+    /* More Like This stays adult only when the details were opened
+       from inside the 18+ section; everywhere else the normal
+       exclusion applies. */
+    var adultView = document.getElementById("adultView");
+    var adultCtx = !!(adultView && adultView.classList.contains("active"));
     if (topSub) {
       searchArchive(MOVIES + ' AND subject:"' + topSub.replace(/"/g, "") + '"',
-        { rows: 20, sort: "downloads desc", type: "movie" })
+        { rows: 20, sort: "downloads desc", type: "movie", allowAdult: adultCtx })
         .then(function (res) {
           var sims = filterVisible(res.items).filter(function (it) {
             return it.id !== item.id && reactionOf(it.id) !== -1;
@@ -2161,21 +2244,38 @@ function closePlayer() {
   playerMode = "";
   refreshPersonalViews();
   refreshHomePersonal();
+  refreshAdultPersonal();
   reloadForUpdateIfPending();
 }
 
 /* ---------- My List and History views ---------- */
 
+/* My List entries as card items, split by adult flag. The normal
+   list shows only non-adult titles; the 18+ section shows only the
+   adult ones. */
+function myListItems(adultOnly) {
+  return state.myList.filter(function (m) { return !!m.adult === !!adultOnly; })
+    .map(function (m) {
+      return { id: m.id, title: m.title, year: m.year, type: m.type,
+        subjects: [], rating: null, downloads: 0 };
+    });
+}
+
+/* History entries, newest first, split by adult flag. */
+function historyEntries(adultOnly) {
+  return Object.keys(state.history).map(function (id) { return state.history[id]; })
+    .filter(function (h) { return isAdultEntry(h) === !!adultOnly; })
+    .sort(function (a, b) { return b.lastWatchedAt - a.lastWatchedAt; });
+}
+
 function renderMyList() {
   var grid = document.getElementById("myListGrid");
   grid.innerHTML = "";
-  var items = filterVisible(state.myList.map(function (m) {
-    return { id: m.id, title: m.title, year: m.year, type: m.type,
-      subjects: [], rating: null, downloads: 0 };
-  }));
+  var saved = myListItems(false);
+  var items = filterVisible(saved);
   if (!items.length) {
     grid.innerHTML = '<div class="empty-state">' +
-      (state.myList.length
+      (saved.length
         ? "Your saved titles are all finished and hidden by Hide watched. Turn it off to see them here."
         : "Nothing saved yet. Open any title and tap Add to My List.") + "</div>";
     return;
@@ -2186,8 +2286,8 @@ function renderMyList() {
 function renderHistory() {
   var list = document.getElementById("historyList");
   list.innerHTML = "";
-  var entries = Object.keys(state.history).map(function (id) { return state.history[id]; })
-    .sort(function (a, b) { return b.lastWatchedAt - a.lastWatchedAt; });
+  /* Adult viewing stays inside the 18+ section, never in this list. */
+  var entries = historyEntries(false);
   if (!entries.length) {
     list.innerHTML = '<div class="empty-state">No history yet. Play something and it shows up here.</div>';
     return;
@@ -2507,9 +2607,11 @@ function pinSubmit(entered) {
     }
     setProfilePin(p.id, entered);
     document.getElementById("pinSheet").hidden = true;
+    var cb = ctx.onSuccess;
     pinContext = null;
     renderProfileList();
     toast("PIN set for " + p.name);
+    if (cb) cb();
   }
 }
 
@@ -2683,6 +2785,21 @@ function startProfileRename(row, p) {
 /* ---------- Navigation ---------- */
 
 function showView(name) {
+  /* The 18+ section is gated here, the one choke point for entering
+     a view: disabled profiles go Home, and a locked profile must
+     enter its PIN first. The unlock lasts only while the section
+     stays open; leaving it locks it again. */
+  if (name === "adult") {
+    var access = adultAccess(activeProfile(), adultUnlocked);
+    if (access === "disabled") { showView("home"); return; }
+    if (access === "needs-pin") {
+      var p = activeProfile();
+      openPinSheet({ mode: "verify", profileId: p.id, allowCancel: true,
+        onSuccess: function () { adultUnlocked = true; showView("adult"); } });
+      return;
+    }
+  }
+  if (name !== "adult") adultUnlocked = false;
   document.querySelectorAll(".view").forEach(function (v) { v.classList.remove("active"); });
   document.getElementById(name + "View").classList.add("active");
   document.querySelectorAll(".navbtn").forEach(function (b) {
@@ -2694,7 +2811,213 @@ function showView(name) {
   if (name === "browse" && document.getElementById("browseGrid").children.length === 0) runBrowse(true);
   if (name === "mylist") renderMyList();
   if (name === "history") renderHistory();
-  if (name === "settings") { renderThemePresets(); renderProfileList(); }
+  if (name === "adult") {
+    if (!adultLoaded) loadAdult();
+    else refreshAdultPersonal();
+  }
+  if (name === "settings") { renderThemePresets(); renderProfileList(); renderAdultSettings(); }
+  updateAdultNav();
+}
+
+/* ---------- Adult 18+ section ---------- */
+/* Private by design. The section is hidden unless this profile
+   enabled it in Settings, enabling needs an 18+ confirmation and a
+   profile PIN, and opening it needs the PIN again. Adult titles
+   appear only here: every other query excludes them, and the home
+   shelves, My List and History filter them out. */
+
+var ADULT_ROW_DEFS = [
+  { id: "adult-all", title: "18+ Films", subtitle: "Every adults only film in the Archive's feature collection",
+    q: MOVIES + " AND " + ADULT_QUERY, sort: "downloads desc", allowAdult: true },
+  { id: "adult-erotica", title: "Erotica",
+    q: MOVIES + " AND subject:(erotica OR erotic)", sort: "downloads desc", allowAdult: true },
+  { id: "adult-sexploit", title: "Sexploitation",
+    q: MOVIES + " AND subject:(sexploitation OR softcore)", sort: "downloads desc", allowAdult: true },
+  { id: "adult-sexcomedy", title: "Sex Comedies",
+    q: MOVIES + ' AND subject:"sex comedy"', sort: "downloads desc", allowAdult: true },
+  { id: "adult-nudie", title: "Nudie Classics",
+    q: MOVIES + ' AND subject:(nudie OR "adults only")', sort: "downloads desc", allowAdult: true }
+];
+
+var adultLoaded = false;
+var adultUnlocked = false;
+
+function adultEnabled() {
+  return !!(state && state.adultEnabled);
+}
+
+function updateAdultNav() {
+  var btn = document.getElementById("adultNavBtn");
+  if (btn) btn.hidden = !adultEnabled();
+}
+
+/* Pure gate check, for the node test: can this profile open the
+   section right now? Returns "ok", "needs-pin", or "disabled". */
+function adultAccess(profile, unlocked) {
+  if (!profile || !profile.data || !profile.data.adultEnabled) return "disabled";
+  if (isPinLocked(profile) && !unlocked) return "needs-pin";
+  return "ok";
+}
+
+function renderAdultPersonal(container) {
+  var cw = continueWatchingItems(true);
+  if (cw.length) {
+    var s1 = rowEl("Continue Watching", "Pick up where you left off");
+    s1.classList.add("adult-personal");
+    container.appendChild(s1);
+    fillRow(s1, cw);
+  }
+  var wa = watchAgainItems(true);
+  if (wa.length) {
+    var s2 = rowEl("Watch Again", "Finished titles, ready for another round");
+    s2.classList.add("adult-personal");
+    container.appendChild(s2);
+    fillRow(s2, wa);
+  }
+  var ml = myListItems(true);
+  if (ml.length) {
+    var s3 = rowEl("My 18+ List", "Titles you saved from this section");
+    s3.classList.add("adult-personal");
+    container.appendChild(s3);
+    fillRow(s3, ml);
+  }
+}
+
+function loadAdult() {
+  var container = document.getElementById("adultRows");
+  container.innerHTML = "";
+  renderAdultPersonal(container);
+  ADULT_ROW_DEFS.forEach(function (def) {
+    var section = rowEl(def.title, def.subtitle || "");
+    container.appendChild(section);
+    var scroll = section.querySelector(".row-scroll");
+    scroll.innerHTML = '<div class="skeleton-row"><div class="skeleton-card"></div>' +
+      '<div class="skeleton-card"></div><div class="skeleton-card"></div></div>';
+    var load = function () {
+      loadRow(def).then(function (result) {
+        var items = result.items || result;
+        items = filterVisible(items).filter(function (it) { return reactionOf(it.id) !== -1; });
+        fillRow(section, items, "Nothing found here right now.");
+      }).catch(function () {
+        rowError(section, load);
+      });
+    };
+    load();
+  });
+  adultLoaded = true;
+}
+
+/* Re-render just the 18+ personal shelves without touching the
+   catalog rows. Used when the section opens and after closing the
+   player, so Continue Watching shows the latest place. */
+function refreshAdultPersonal() {
+  var container = document.getElementById("adultRows");
+  if (!container || !adultLoaded) return;
+  var old = container.querySelectorAll(".adult-personal");
+  Array.prototype.forEach.call(old, function (s) { s.remove(); });
+  var temp = document.createElement("div");
+  renderAdultPersonal(temp);
+  var ref = container.firstChild;
+  while (temp.firstChild) container.insertBefore(temp.firstChild, ref);
+}
+
+/* Settings block for the section. Re-rendered whenever Settings
+   opens, so it always reflects the current profile. */
+function renderAdultSettings() {
+  var wrap = document.getElementById("adultSettings");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!adultEnabled()) {
+    var p = document.createElement("p");
+    p.className = "sub";
+    p.textContent = "Off for this profile. Turn it on to add a private 18+ area " +
+      "with adults only films from archive.org. Nothing from it ever appears " +
+      "on Home, in Browse, in search, or in any other profile.";
+    wrap.appendChild(p);
+    var btn = document.createElement("button");
+    btn.className = "btn btn-primary";
+    btn.id = "adultEnableBtn";
+    btn.textContent = "Turn on 18+ section";
+    btn.addEventListener("click", startAdultEnable);
+    var row = document.createElement("div");
+    row.className = "key-row";
+    row.appendChild(btn);
+    wrap.appendChild(row);
+    var confirm = document.createElement("div");
+    confirm.className = "adult-confirm";
+    confirm.id = "adultConfirmRow";
+    confirm.hidden = true;
+    confirm.innerHTML =
+      '<label class="adult-check"><input type="checkbox" id="adultAgeCheck"> ' +
+      "I confirm I am 18 years or older.</label>" +
+      '<button class="btn btn-primary" id="adultConfirmBtn" disabled>Enable 18+ section</button>';
+    wrap.appendChild(confirm);
+    var check = confirm.querySelector("#adultAgeCheck");
+    var confirmBtn = confirm.querySelector("#adultConfirmBtn");
+    check.addEventListener("change", function () { confirmBtn.disabled = !check.checked; });
+    confirmBtn.addEventListener("click", confirmAdultEnable);
+    return;
+  }
+  var on = document.createElement("p");
+  on.className = "sub";
+  on.textContent = "On for this profile. Open it from the 18+ button in the top bar. " +
+    "Opening it asks for this profile's PIN.";
+  wrap.appendChild(on);
+  var row2 = document.createElement("div");
+  row2.className = "key-row";
+  var open = document.createElement("button");
+  open.className = "btn btn-primary";
+  open.textContent = "Open 18+ section";
+  open.addEventListener("click", function () { showView("adult"); });
+  var off = document.createElement("button");
+  off.className = "btn btn-ghost";
+  off.textContent = "Turn off 18+ section";
+  off.addEventListener("click", disableAdultSection);
+  row2.appendChild(open);
+  row2.appendChild(off);
+  wrap.appendChild(row2);
+}
+
+/* Enabling needs a PIN first: without one there is nothing keeping
+   the section private. After the PIN is set, the 18+ confirmation
+   appears. */
+function startAdultEnable() {
+  var p = activeProfile();
+  if (!p) return;
+  if (!isPinLocked(p)) {
+    toast("Set a PIN for this profile first, so the 18+ section stays private.");
+    openPinSheet({ mode: "set", profileId: p.id, allowCancel: true,
+      onSuccess: function () { showAdultConfirm(); } });
+    return;
+  }
+  showAdultConfirm();
+}
+
+function showAdultConfirm() {
+  var row = document.getElementById("adultConfirmRow");
+  if (!row) return;
+  row.hidden = false;
+  var check = document.getElementById("adultAgeCheck");
+  if (check) check.focus();
+}
+
+function confirmAdultEnable() {
+  var check = document.getElementById("adultAgeCheck");
+  if (!check || !check.checked) return;
+  state.adultEnabled = true;
+  saveState();
+  updateAdultNav();
+  renderAdultSettings();
+  toast("18+ section is on for this profile");
+}
+
+function disableAdultSection() {
+  state.adultEnabled = false;
+  adultUnlocked = false;
+  saveState();
+  updateAdultNav();
+  renderAdultSettings();
+  toast("18+ section is off");
 }
 
 /* ---------- Pull to refresh (Home only) ---------- */
@@ -3208,6 +3531,7 @@ function init() {
   /* Who is watching? More than one profile gets the picker. One
      profile opens straight in, with a PIN prompt when it is locked. */
   updateProfileButton();
+  updateAdultNav();
   if (profilesStore.profiles.length > 1) {
     openPicker(false);
   } else {
@@ -3268,7 +3592,20 @@ if (typeof module !== "undefined" && module.exports) {
     guardThumbnail: guardThumbnail,
     ROW_DEFS: ROW_DEFS,
     searchUrl: searchUrl,
+    searchArchive: searchArchive,
     buildBrowseQuery: buildBrowseQuery,
+    applyAdultExclusion: applyAdultExclusion,
+    isAdultItem: isAdultItem,
+    isAdultEntry: isAdultEntry,
+    adultAccess: adultAccess,
+    ADULT_SUBJECTS: ADULT_SUBJECTS,
+    ADULT_QUERY: ADULT_QUERY,
+    ADULT_ROW_DEFS: ADULT_ROW_DEFS,
+    continueWatchingItems: continueWatchingItems,
+    watchAgainItems: watchAgainItems,
+    topSignalSubjects: topSignalSubjects,
+    myListItems: myListItems,
+    historyEntries: historyEntries,
     defaultState: defaultState,
     defaultProfileData: defaultProfileData,
     defaultDeviceState: defaultDeviceState,
@@ -3288,6 +3625,7 @@ if (typeof module !== "undefined" && module.exports) {
     parseBackup: parseBackup,
     wipeAllData: wipeAllData,
     recordProgress: recordProgress,
+    toggleMyList: toggleMyList,
     MAX_PROFILES: MAX_PROFILES,
     PROFILE_COLORS: PROFILE_COLORS,
     /* Test hooks: seed the in-memory store and reload through the

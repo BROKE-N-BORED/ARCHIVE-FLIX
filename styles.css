@@ -689,6 +689,22 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 }
 .filebtn { display: inline-flex; align-items: center; }
 
+/* 18+ section confirmation row in Settings */
+.adult-confirm {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+}
+.adult-confirm[hidden] { display: none; }
+.adult-check { display: flex; gap: 10px; align-items: center; font-weight: 600; cursor: pointer; }
+.adult-check input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.adult-confirm .btn { align-self: flex-start; }
+
 /* Profiles */
 .profile-btn {
   display: flex;

@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## v1.4.0 - 2026-11-14
+
+- A private 18+ section, hidden by default. Nothing about it shows
+  anywhere, no nav entry and no rows, until the profile owner turns
+  it on in Settings. Turning it on needs an "I am 18 years or older"
+  confirmation and a profile PIN; opening the section asks for the
+  PIN again, and leaving the section locks it again. The section is
+  per profile, so other profiles see no trace of it.
+- The 18+ catalog is the Archive's own adult tagged films: 107
+  titles in the feature collection (subjects adult, erotica,
+  erotic, sexploitation, softcore, nudie, "adults only" and "sex
+  comedy"), in five rows (18+ Films, Erotica, Sexploitation, Sex
+  Comedies, Nudie Classics), with the same details and playback as
+  the rest of the app. Adult viewing stays inside the section, with
+  its own Continue Watching, Watch Again and My List.
+- No leaks: every normal catalog query excludes adult titles at the
+  query level, results are filtered again on the way in, and adult
+  titles never appear in the home rows, Browse, search, the hero,
+  recommendations, My List or History outside the section. Inclusion
+  and exclusion share one definition, so a title can never be in
+  the section and still show in normal search. Verified live
+  against the Archive, both ways: every one of the 107 titles
+  returns from the section query and returns zero under the normal
+  exclusion. The audit also caught an untagged second upload of
+  Madame and Her Niece (1969), which carried only Sex Comedy tags;
+  "sex comedy" is in the adult set because of it.
+- The service worker cache is bumped to v6 so installed copies pick
+  up the new shell.
+
 ## v1.3.1 - 2026-11-14
 
 - No more blank thumbnails. Every place a thumbnail appears (poster

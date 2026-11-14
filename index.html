@@ -25,6 +25,7 @@
       <button class="navbtn" data-view="browse">Browse</button>
       <button class="navbtn" data-view="mylist">My List</button>
       <button class="navbtn" data-view="history">History</button>
+      <button class="navbtn" id="adultNavBtn" data-view="adult" hidden>18+</button>
     </nav>
     <div class="topbar-right">
       <label class="hidewatched">
@@ -164,6 +165,16 @@
     <div id="historyList" class="history-list"></div>
   </section>
 
+  <!-- 18+ -->
+  <section id="adultView" class="view" aria-label="18+ section">
+    <div class="browse-head">
+      <h1>18+</h1>
+      <p class="sub">Adults only films from archive.org. Private to this profile.</p>
+    </div>
+    <div id="adultRows" class="rows"></div>
+    <p class="source-note">Catalog and playback come from archive.org. Titles, years and descriptions are the Archive's own uploader supplied metadata, shown as-is.</p>
+  </section>
+
   <!-- SETTINGS -->
   <section id="settingsView" class="view" aria-label="Settings">
     <div class="browse-head">
@@ -189,6 +200,10 @@
       <button class="btn btn-primary" id="addProfileBtn">Add a profile</button>
     </div>
     <p class="sub">A PIN is a casual lock screen for this device, not encryption. It keeps other people on this device from opening the profile. It does not hide the data from anyone who can read this browser's storage.</p>
+
+    <h2 class="section-title">18+ section</h2>
+    <p class="sub">A private adults only area for this profile, with films from archive.org tagged for adults. It stays hidden until you turn it on, and opening it needs this profile's PIN.</p>
+    <div id="adultSettings"></div>
 
     <h2 class="section-title">IMDb ratings (optional)</h2>
     <p class="sub">The Top IMDb row uses real IMDb ratings, and cards can show real movie posters, only when you add a free OMDb key. The key stays in this browser and is never sent anywhere except omdbapi.com. Without a key, that row falls back to Archive ratings and says so.</p>
