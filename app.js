@@ -70,7 +70,7 @@ function cleanTitle(t) {
 
 function cleanText(t, max) {
   t = String(t == null ? "" : t).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-  if (t.length > max) t = t.slice(0, max - 1).trim() + "...";
+  if (max && t.length > max) t = t.slice(0, max - 1).trim() + "...";
   return t;
 }
 
@@ -142,7 +142,7 @@ function normalizeDoc(doc, fallbackType) {
     title: cleanTitle(doc.title),
     year: isNaN(year) ? null : year,
     creator: toArray(doc.creator)[0] ? String(toArray(doc.creator)[0]) : "",
-    description: cleanText(doc.description, 600),
+    description: cleanText(doc.description),
     rating: doc.avg_rating != null ? Number(doc.avg_rating) : null,
     downloads: doc.downloads != null ? Number(doc.downloads) : 0,
     numReviews: doc.num_reviews != null ? Number(doc.num_reviews) : 0,
@@ -442,6 +442,41 @@ function rowError(section, retry) {
   scroll.appendChild(b);
 }
 
+/* Expandable descriptions: long text is clamped with a Read more toggle
+   that expands it in place. The toggle only shows when the text is
+   actually longer than the clamped display. */
+function descHtml(text, pClass) {
+  return '<div class="desc-wrap"><p class="' + pClass + ' desc-text clamped">' +
+    esc(text) + '</p><button class="read-more-btn" type="button" hidden ' +
+    'aria-expanded="false">Read more</button></div>';
+}
+
+function wireExpandableDescs(root) {
+  root = root || document;
+  var wraps = root.querySelectorAll ? root.querySelectorAll(".desc-wrap") : [];
+  Array.prototype.forEach.call(wraps, function (wrap) {
+    var text = wrap.querySelector(".desc-text");
+    var btn = wrap.querySelector(".read-more-btn");
+    if (!text || !btn) return;
+    if (!wrap.getAttribute("data-wired")) {
+      wrap.setAttribute("data-wired", "1");
+      btn.addEventListener("click", function () {
+        var open = wrap.classList.toggle("expanded");
+        btn.textContent = open ? "Read less" : "Read more";
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+    }
+    if (wrap.classList.contains("expanded")) { btn.hidden = false; return; }
+    var overflowing;
+    if (text.clientHeight > 0) {
+      overflowing = text.scrollHeight > text.clientHeight + 1;
+    } else {
+      overflowing = text.textContent.length > 200;
+    }
+    btn.hidden = !overflowing;
+  });
+}
+
 /* ---------- Row definitions ---------- */
 
 var MOVIES = "collection:feature_films";
@@ -570,13 +605,14 @@ function renderHero(item) {
     "<h2>" + esc(item.title) + "</h2>" +
     '<p class="hero-meta">' + esc([item.year ? String(item.year) : "", typeLabel(item.type),
       item.creator ? "Directed by " + item.creator : "", starText(item.rating)].filter(Boolean).join(" · ")) + "</p>" +
-    (item.description ? '<p class="hero-desc">' + esc(item.description) + "</p>" : "") +
+    (item.description ? descHtml(item.description, "hero-desc") : "") +
     '<div class="hero-actions">' +
     '<button class="btn btn-primary" id="heroPlay">Play</button>' +
     '<button class="btn" id="heroDetails">Details</button>' +
     "</div></div>";
   document.getElementById("heroPlay").addEventListener("click", function () { openPlayer(item); });
   document.getElementById("heroDetails").addEventListener("click", function () { openDetails(item); });
+  wireExpandableDescs(hero);
 }
 
 function continueWatchingItems() {
@@ -841,7 +877,7 @@ function openDetails(item) {
         if (part) subjects.push(part);
       });
     });
-    var desc = cleanText(toArray(m.description)[0] || item.description, 1200);
+    var desc = cleanText(toArray(m.description)[0] || item.description);
     var year = m.date ? String(m.date).slice(0, 4) : (item.year ? String(item.year) : "");
     var creator = toArray(m.creator)[0] ? String(toArray(m.creator)[0]) : item.creator;
     var h = state.history[item.id];
@@ -863,7 +899,7 @@ function openDetails(item) {
         creator ? "By " + creator : "", runtime,
         badge, h ? "Watched " + h.watchCount + " time" + (h.watchCount === 1 ? "" : "s") : ""]
         .filter(Boolean).join(" · ")) + "</p>" +
-      '<p class="details-desc">' + esc(desc || "No synopsis on the Archive for this one.") + "</p>" +
+      (desc ? descHtml(desc, "details-desc") : '<p class="details-desc">No synopsis on the Archive for this one.</p>') +
       (subjects.length ? '<div class="tag-row">' +
         subjects.slice(0, 8).map(function (s) { return '<span class="tag">' + esc(s) + "</span>"; }).join("") +
         "</div>" : "") +
@@ -907,6 +943,7 @@ function openDetails(item) {
       recordProgress(fullItem, Number(slider.value) / 100);
       toast(Number(slider.value) >= 100 ? "Marked as finished" : "Place saved at " + slider.value + "%");
     });
+    wireExpandableDescs(body);
 
     var similarRow = document.getElementById("similarRow");
     var topSub = subjects[0];
@@ -1077,6 +1114,7 @@ function showView(name) {
   });
   window.scrollTo(0, 0);
   if (name === "home" && !homeLoaded) loadHome();
+  if (name === "home") wireExpandableDescs(document.getElementById("hero"));
   if (name === "browse" && document.getElementById("browseGrid").children.length === 0) runBrowse(true);
   if (name === "mylist") renderMyList();
   if (name === "history") renderHistory();
@@ -1103,6 +1141,12 @@ function init() {
   applyTheme();
   renderThemePresets();
   syncHideWatchedBoxes();
+
+  var resizeTimer = null;
+  window.addEventListener("resize", function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () { wireExpandableDescs(document); }, 200);
+  });
 
   document.querySelectorAll(".navbtn").forEach(function (b) {
     b.addEventListener("click", function () { showView(b.dataset.view); });

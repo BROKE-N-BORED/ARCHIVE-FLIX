@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v1.0.1 - 2026-11-14
+
+- Descriptions no longer cut off with no way to read the rest. The hero
+  synopsis and the details sheet synopsis now show a Read more toggle
+  when the text is longer than the space, expanding in place to the full
+  Archive description, with Read less to collapse again. Short
+  descriptions show in full with no toggle. Descriptions are no longer
+  cut short when loaded, so the expanded text is the complete synopsis.
+
 ## v1.0 - 2026-11-14
 
 First release. Standalone ARCHIVEFLIX web app, plain HTML, CSS and
