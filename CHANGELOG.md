@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## v1.3.0 - 2026-11-14
+
+- Profiles, Netflix style. Up to 5 profiles, each with its own watch
+  history, Continue Watching, My List, likes and not-for-me, and
+  theme. A "Who is watching?" picker opens when there is more than
+  one profile; a single profile opens straight in. Switch from the
+  profile button in the top bar or from Settings. API keys stay
+  device level and are shared across profiles.
+- Optional 4 digit PIN lock per profile. A locked profile asks for
+  its PIN before it opens or can be switched into, so nobody else on
+  the device can view that profile. The PIN is stored as a salted
+  hash, never plaintext, and changing or removing it needs the
+  current PIN. A forgotten PIN can be reset from the PIN pad, which
+  erases that profile's history, My List and likes and removes the
+  lock, so a forgotten PIN never exposes the profile and never locks
+  the app. A PIN is a casual lock screen for the device, not
+  encryption, and Settings says so.
+- Existing data is moved into the first profile automatically on the
+  first load after the update, so nothing is lost. The migration
+  runs once and is safe if it runs again.
+- Export now covers all profiles, and import takes the new backup
+  format as well as old single profile backups (those land in the
+  currently open profile).
+- Clean release audit: the repo holds no user data of any kind.
+  History, My List, likes and keys live only in the browser's local
+  storage and are never written into any repo file, and export is
+  user initiated only. README says so.
+- The service worker cache is bumped to v4 so installed copies pick
+  up the new shell.
+
 ## v1.2.1 - 2026-11-14
 
 - Updates now show up on their own. The app watches for a new

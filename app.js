@@ -20,6 +20,13 @@
 var API = "https://archive.org/advancedsearch.php";
 var META_API = "https://archive.org/metadata/";
 var STORE_KEY = "archiveflix.v1";
+var PROFILES_KEY = "archiveflix.profiles.v1";
+var MAX_PROFILES = 5;
+var PROFILE_COLORS = ["#f0b429", "#3b82f6", "#22c55e", "#a855f7", "#ef4444"];
+/* Fields that belong to one profile. API keys and the OMDb ratings
+   cache stay device level, shared across profiles. */
+var PROFILE_FIELDS = ["history", "myList", "reactions", "hideWatched", "theme", "customAccent"];
+var DEVICE_FIELDS = ["omdbKey", "omdbCache", "tmdbKey"];
 var ROW_SIZE = 24;
 
 /* Items that are playlists or collection pages, not films. Skip them. */
@@ -252,47 +259,410 @@ function pickPlayableFile(files) {
 }
 
 /* ---------- State (localStorage) ---------- */
+/* Two stores. The device store (archiveflix.v1) holds only the API
+   keys and the OMDb ratings cache, shared across profiles. The
+   profiles store (archiveflix.profiles.v1) holds up to 5 profiles,
+   each with its own history, My List, reactions, hide-watched
+   setting and theme. The rest of the app reads one merged `state`
+   object, so the profile code stays in this section and saveState()
+   splits it back into the two stores. Nothing personal ever leaves
+   the browser: export is a button the user taps in Settings. */
 
-var memoryStore = null;
+var nodeStore = {}; /* in-memory fallback for node tests and browsers
+                       that block storage. Nothing here is shipped. */
 
-function defaultState() {
+function storeGet(key) {
+  try { return window.localStorage.getItem(key); }
+  catch (e) { return Object.prototype.hasOwnProperty.call(nodeStore, key) ? nodeStore[key] : null; }
+}
+
+function storeSet(key, value) {
+  try { window.localStorage.setItem(key, value); }
+  catch (e) { nodeStore[key] = value; }
+}
+
+function storeRemove(key) {
+  try { window.localStorage.removeItem(key); }
+  catch (e) { delete nodeStore[key]; }
+}
+
+function defaultProfileData() {
   return {
-    version: 1,
     history: {},
     myList: [],
     reactions: {},
     hideWatched: false,
     theme: "flix",
-    customAccent: "",
-    omdbKey: "",
-    omdbCache: {},
-    tmdbKey: ""
+    customAccent: ""
   };
 }
 
-function loadState() {
-  try {
-    var raw = window.localStorage.getItem(STORE_KEY);
-    if (!raw) return defaultState();
-    var s = JSON.parse(raw);
-    var d = defaultState();
-    Object.keys(d).forEach(function (k) { if (s[k] == null) s[k] = d[k]; });
-    return s;
-  } catch (e) {
-    if (!memoryStore) memoryStore = defaultState();
-    return memoryStore;
+function defaultDeviceState() {
+  return { version: 2, omdbKey: "", omdbCache: {}, tmdbKey: "" };
+}
+
+/* The merged shape the rest of the app reads: device fields plus the
+   active profile's fields. */
+function defaultState() {
+  var s = defaultProfileData();
+  s.version = 2;
+  s.omdbKey = "";
+  s.omdbCache = {};
+  s.tmdbKey = "";
+  return s;
+}
+
+function sanitizeProfileData(d) {
+  var out = defaultProfileData();
+  if (d && typeof d === "object") {
+    PROFILE_FIELDS.forEach(function (k) { if (d[k] != null) out[k] = d[k]; });
   }
+  if (!out.history || typeof out.history !== "object") out.history = {};
+  if (!Array.isArray(out.myList)) out.myList = [];
+  if (!out.reactions || typeof out.reactions !== "object") out.reactions = {};
+  if (typeof out.hideWatched !== "boolean") out.hideWatched = false;
+  if (typeof out.theme !== "string" || !out.theme) out.theme = "flix";
+  if (typeof out.customAccent !== "string") out.customAccent = "";
+  return out;
+}
+
+function sanitizeProfile(p) {
+  if (!p || typeof p !== "object" || !p.id || !p.name) return null;
+  return {
+    id: String(p.id),
+    name: String(p.name).slice(0, 20),
+    color: PROFILE_COLORS.indexOf(p.color) !== -1 ? p.color : PROFILE_COLORS[0],
+    pinHash: typeof p.pinHash === "string" ? p.pinHash : "",
+    pinSalt: typeof p.pinSalt === "string" ? p.pinSalt : "",
+    data: sanitizeProfileData(p.data)
+  };
+}
+
+function loadDeviceState() {
+  var d = defaultDeviceState();
+  try {
+    var raw = storeGet(STORE_KEY);
+    if (!raw) return d;
+    var s = JSON.parse(raw);
+    if (!s || typeof s !== "object") return d;
+    /* Whitelist: only device fields survive. Profile fields from an
+       old v1 store are dropped here; the migration below moves them
+       into a profile first, reading the raw store itself. */
+    DEVICE_FIELDS.forEach(function (k) { if (s[k] != null) d[k] = s[k]; });
+    return d;
+  } catch (e) { return d; }
+}
+
+function loadProfilesStore() {
+  try {
+    var raw = storeGet(PROFILES_KEY);
+    if (!raw) return null;
+    var s = JSON.parse(raw);
+    if (!s || !Array.isArray(s.profiles) || !s.profiles.length) return null;
+    var profiles = [];
+    s.profiles.forEach(function (p) {
+      var clean = sanitizeProfile(p);
+      if (clean) profiles.push(clean);
+    });
+    if (!profiles.length) return null;
+    var activeId = s.activeId;
+    if (!profiles.some(function (p) { return p.id === activeId; })) activeId = profiles[0].id;
+    return { version: 1, activeId: activeId, profiles: profiles.slice(0, MAX_PROFILES) };
+  } catch (e) { return null; }
+}
+
+/* First load after the profiles update: move the existing single
+   profile data (the old v1 device store) into the first profile, so
+   nothing is lost. Runs only when there is no profiles store yet,
+   which makes it safe to run twice: the second run finds the store
+   and skips. */
+function migrateFromDevice(deviceRaw) {
+  var data = defaultProfileData();
+  try {
+    var s = deviceRaw ? JSON.parse(deviceRaw) : null;
+    if (s && typeof s === "object") data = sanitizeProfileData(s);
+  } catch (e) { /* corrupt old store: start empty, do not crash */ }
+  return {
+    version: 1,
+    activeId: "p-main",
+    profiles: [{
+      id: "p-main",
+      name: "Main",
+      color: PROFILE_COLORS[0],
+      pinHash: "",
+      pinSalt: "",
+      data: data
+    }]
+  };
+}
+
+var deviceState = null;
+var profilesStore = null;
+var state = null;
+
+function persistStores() {
+  storeSet(STORE_KEY, JSON.stringify(deviceState));
+  storeSet(PROFILES_KEY, JSON.stringify(profilesStore));
+}
+
+function activeProfile() {
+  if (!profilesStore) return null;
+  var found = null;
+  profilesStore.profiles.forEach(function (p) {
+    if (p.id === profilesStore.activeId) found = p;
+  });
+  return found || profilesStore.profiles[0] || null;
+}
+
+function findProfile(id) {
+  var found = null;
+  (profilesStore.profiles || []).forEach(function (p) {
+    if (p.id === id) found = p;
+  });
+  return found;
+}
+
+/* The merged view the rest of the app reads: device fields plus the
+   active profile's fields. Profile data objects are shared by
+   reference, so in place edits (recordProgress and friends) land in
+   the profile and saveState only has to persist the stores. */
+function mergeState() {
+  var p = activeProfile();
+  var s = defaultState();
+  DEVICE_FIELDS.forEach(function (k) { s[k] = deviceState[k]; });
+  if (p) PROFILE_FIELDS.forEach(function (k) { s[k] = p.data[k]; });
+  return s;
+}
+
+function loadStores() {
+  deviceState = loadDeviceState();
+  profilesStore = loadProfilesStore();
+  if (!profilesStore) {
+    profilesStore = migrateFromDevice(storeGet(STORE_KEY));
+    persistStores();
+  }
+  state = mergeState();
+  return state;
 }
 
 function saveState() {
-  try {
-    window.localStorage.setItem(STORE_KEY, JSON.stringify(state));
-  } catch (e) {
-    memoryStore = state;
-  }
+  DEVICE_FIELDS.forEach(function (k) { deviceState[k] = state[k]; });
+  var p = activeProfile();
+  if (p) PROFILE_FIELDS.forEach(function (k) { p.data[k] = state[k]; });
+  persistStores();
 }
 
-var state = loadState();
+loadStores();
+
+/* ---------- PIN lock ---------- */
+/* A 4 digit PIN, stored as a salted iterated hash, never plaintext.
+   This is a casual lock screen for the device, not encryption, and
+   Settings says so. FNV-1a with 256 rounds is plenty for a 4 digit
+   lock and needs no async crypto API, so it works the same in node
+   tests and on file:// installs. */
+
+function hashPin(pin, salt) {
+  var input = String(salt) + ":" + String(pin);
+  var h = 2166136261;
+  for (var round = 0; round < 256; round++) {
+    for (var i = 0; i < input.length; i++) {
+      h ^= input.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    input = (h >>> 0).toString(16);
+  }
+  return ("0000000" + (h >>> 0).toString(16)).slice(-8);
+}
+
+function makePinSalt() {
+  var s = "";
+  var chars = "0123456789abcdef";
+  for (var i = 0; i < 12; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+
+function isPinLocked(profile) {
+  return !!(profile && profile.pinHash);
+}
+
+function checkProfilePin(id, pin) {
+  var p = findProfile(id);
+  if (!p || !p.pinHash) return false;
+  if (!/^\d{4}$/.test(String(pin == null ? "" : pin))) return false;
+  return hashPin(pin, p.pinSalt) === p.pinHash;
+}
+
+/* ---------- Profiles ---------- */
+
+function newProfileId() {
+  return "p" + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
+}
+
+function cleanProfileName(name) {
+  return String(name == null ? "" : name).replace(/\s+/g, " ").trim().slice(0, 20);
+}
+
+function createProfile(name) {
+  name = cleanProfileName(name);
+  if (!name) return null;
+  if (profilesStore.profiles.length >= MAX_PROFILES) return null;
+  var used = profilesStore.profiles.map(function (p) { return p.color; });
+  var color = null;
+  for (var i = 0; i < PROFILE_COLORS.length; i++) {
+    if (used.indexOf(PROFILE_COLORS[i]) === -1) { color = PROFILE_COLORS[i]; break; }
+  }
+  if (!color) color = PROFILE_COLORS[profilesStore.profiles.length % PROFILE_COLORS.length];
+  var p = {
+    id: newProfileId(),
+    name: name,
+    color: color,
+    pinHash: "",
+    pinSalt: "",
+    data: defaultProfileData()
+  };
+  profilesStore.profiles.push(p);
+  saveState();
+  return p;
+}
+
+function renameProfile(id, name) {
+  var p = findProfile(id);
+  name = cleanProfileName(name);
+  if (!p || !name) return false;
+  p.name = name;
+  saveState();
+  return true;
+}
+
+function deleteProfile(id) {
+  if (profilesStore.profiles.length <= 1) return false;
+  var idx = -1;
+  profilesStore.profiles.forEach(function (p, i) { if (p.id === id) idx = i; });
+  if (idx === -1) return false;
+  profilesStore.profiles.splice(idx, 1);
+  if (profilesStore.activeId === id) {
+    profilesStore.activeId = profilesStore.profiles[0].id;
+    state = mergeState();
+  }
+  saveState();
+  return true;
+}
+
+function setProfilePin(id, pin) {
+  var p = findProfile(id);
+  if (!p || !/^\d{4}$/.test(String(pin == null ? "" : pin))) return false;
+  p.pinSalt = makePinSalt();
+  p.pinHash = hashPin(pin, p.pinSalt);
+  saveState();
+  return true;
+}
+
+function removeProfilePin(id) {
+  var p = findProfile(id);
+  if (!p) return false;
+  p.pinHash = "";
+  p.pinSalt = "";
+  saveState();
+  return true;
+}
+
+/* Wipe one profile's personal data and its lock, keeping the profile
+   itself. Used by the Forgot PIN reset, so a forgotten PIN never
+   exposes the profile and never locks the app. */
+function resetProfileData(id) {
+  var p = findProfile(id);
+  if (!p) return false;
+  p.data = defaultProfileData();
+  p.pinHash = "";
+  p.pinSalt = "";
+  if (profilesStore.activeId === id) state = mergeState();
+  saveState();
+  return true;
+}
+
+function switchProfile(id) {
+  if (!findProfile(id)) return false;
+  saveState();
+  profilesStore.activeId = id;
+  state = mergeState();
+  saveState();
+  return true;
+}
+
+/* ---------- Backup ---------- */
+/* A backup covers all profiles plus the device keys. Import takes
+   this format, and also the old single profile format, whose fields
+   land in the currently open profile. */
+
+function buildBackup() {
+  saveState();
+  return {
+    format: "archiveflix-backup",
+    backupVersion: 2,
+    exportedAt: Date.now(),
+    device: {
+      omdbKey: deviceState.omdbKey || "",
+      omdbCache: deviceState.omdbCache || {},
+      tmdbKey: deviceState.tmdbKey || ""
+    },
+    profiles: {
+      version: 1,
+      activeId: profilesStore.activeId,
+      profiles: profilesStore.profiles
+    }
+  };
+}
+
+/* Returns "v2" for a full multi profile backup, "v1" for an old
+   single profile backup, or "" when the file is not a backup. */
+function parseBackup(data) {
+  if (!data || typeof data !== "object") return "";
+  if (data.backupVersion === 2 && data.profiles && Array.isArray(data.profiles.profiles)) {
+    var profiles = [];
+    data.profiles.profiles.forEach(function (p) {
+      var clean = sanitizeProfile(p);
+      if (clean) profiles.push(clean);
+    });
+    if (!profiles.length) return "";
+    profiles = profiles.slice(0, MAX_PROFILES);
+    var activeId = data.profiles.activeId;
+    if (!profiles.some(function (p) { return p.id === activeId; })) activeId = profiles[0].id;
+    profilesStore = { version: 1, activeId: activeId, profiles: profiles };
+    deviceState = defaultDeviceState();
+    if (data.device && typeof data.device === "object") {
+      DEVICE_FIELDS.forEach(function (k) { if (data.device[k] != null) deviceState[k] = data.device[k]; });
+    }
+    state = mergeState();
+    persistStores();
+    return "v2";
+  }
+  if (data.history && typeof data.history === "object") {
+    var p = activeProfile();
+    if (!p) return "";
+    p.data = sanitizeProfileData(data);
+    if (data.omdbKey != null) deviceState.omdbKey = data.omdbKey;
+    if (data.omdbCache != null) deviceState.omdbCache = data.omdbCache;
+    if (data.tmdbKey != null) deviceState.tmdbKey = data.tmdbKey;
+    state = mergeState();
+    persistStores();
+    return "v1";
+  }
+  return "";
+}
+
+function wipeAllData() {
+  deviceState = defaultDeviceState();
+  profilesStore = {
+    version: 1,
+    activeId: "p-main",
+    profiles: [{
+      id: "p-main", name: "Main", color: PROFILE_COLORS[0],
+      pinHash: "", pinSalt: "", data: defaultProfileData()
+    }]
+  };
+  state = mergeState();
+  persistStores();
+}
 
 function isFinished(id) {
   var h = state.history[id];
@@ -453,7 +823,7 @@ var POSTER_CACHE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function loadPosterCache() {
   try {
-    var raw = window.localStorage.getItem(POSTER_CACHE_KEY);
+    var raw = storeGet(POSTER_CACHE_KEY);
     if (!raw) return {};
     var c = JSON.parse(raw);
     if (!c || typeof c !== "object") return {};
@@ -477,14 +847,14 @@ function savePosterCache() {
       keys.sort(function (a, b) { return (posterCache[a].ts || 0) - (posterCache[b].ts || 0); });
       keys.slice(0, keys.length - POSTER_CACHE_MAX).forEach(function (k) { delete posterCache[k]; });
     }
-    window.localStorage.setItem(POSTER_CACHE_KEY, JSON.stringify(posterCache));
+    storeSet(POSTER_CACHE_KEY, JSON.stringify(posterCache));
   } catch (e) { /* private mode or full: posters just re-resolve next visit */ }
 }
 
 function clearPosterCache() {
   posterCache = {};
   posterAttempted = {};
-  try { window.localStorage.removeItem(POSTER_CACHE_KEY); } catch (e) {}
+  storeRemove(POSTER_CACHE_KEY);
 }
 
 /* Clean a catalog title for poster matching: drop parentheticals, a
@@ -1712,6 +2082,391 @@ function renderThemePresets() {
   });
 }
 
+/* ---------- Profiles UI ---------- */
+
+var profileEntered = false;
+
+function avatarLetter(name) {
+  var n = cleanProfileName(name);
+  return n ? n.charAt(0).toUpperCase() : "?";
+}
+
+function updateProfileButton() {
+  var p = activeProfile();
+  var btn = document.getElementById("profileBtn");
+  var avatar = document.getElementById("profileAvatar");
+  var name = document.getElementById("profileName");
+  if (!p || !btn || !avatar || !name) return;
+  avatar.textContent = avatarLetter(p.name);
+  avatar.style.background = p.color;
+  avatar.style.color = accentTextFor(p.color);
+  name.textContent = p.name;
+  btn.setAttribute("aria-label", "Switch profile, currently " + p.name);
+}
+
+function renderProfileTiles() {
+  var wrap = document.getElementById("profileTiles");
+  wrap.innerHTML = "";
+  profilesStore.profiles.forEach(function (p) {
+    var tile = document.createElement("button");
+    tile.className = "profile-tile";
+    tile.innerHTML =
+      '<span class="profile-tile-avatar" style="background:' + esc(p.color) +
+      ";color:" + esc(accentTextFor(p.color)) + '">' + esc(avatarLetter(p.name)) + "</span>" +
+      '<span class="profile-tile-name">' + esc(p.name) + "</span>" +
+      (isPinLocked(p) ? '<span class="profile-tile-lock">Locked</span>' : "");
+    tile.addEventListener("click", function () {
+      if (isPinLocked(p)) {
+        openPinSheet({ mode: "unlock", profileId: p.id, allowCancel: true });
+      } else {
+        enterProfile(p.id);
+      }
+    });
+    wrap.appendChild(tile);
+  });
+  if (profilesStore.profiles.length < MAX_PROFILES) {
+    var add = document.createElement("button");
+    add.className = "profile-tile profile-tile-add";
+    add.innerHTML = '<span class="profile-tile-avatar profile-tile-plus">+</span>' +
+      '<span class="profile-tile-name">Add profile</span>';
+    add.addEventListener("click", function () {
+      document.getElementById("profileAddRow").hidden = false;
+      document.getElementById("profileNameInput").focus();
+    });
+    wrap.appendChild(add);
+  }
+}
+
+function openPicker(canClose) {
+  renderProfileTiles();
+  document.getElementById("profileAddRow").hidden = true;
+  document.getElementById("profileNameInput").value = "";
+  document.getElementById("pickerClose").hidden = !canClose;
+  document.getElementById("profileManageBtn").hidden = !profileEntered;
+  document.getElementById("profilePicker").hidden = false;
+  document.body.style.overflow = "hidden";
+}
+
+function closePicker() {
+  if (!profileEntered) return;
+  document.getElementById("profilePicker").hidden = true;
+  document.body.style.overflow = "";
+}
+
+/* Enter a profile (its PIN, if any, was already checked by the
+   caller). Re-renders the home rows with this profile's progress,
+   so a switch never shows the last profile's shelves. */
+function enterProfile(id) {
+  if (!switchProfile(id)) return;
+  profileEntered = true;
+  document.getElementById("profilePicker").hidden = true;
+  document.body.style.overflow = "";
+  applyTheme();
+  renderThemePresets();
+  syncHideWatchedBoxes();
+  updateProfileButton();
+  var wasLoaded = homeLoaded;
+  showView("home");
+  if (wasLoaded) loadHome();
+  refreshPersonalViews();
+}
+
+/* PIN pad. Modes:
+   unlock: check the PIN, then enter the profile.
+   verify: check the PIN, then run pinContext.onSuccess.
+   set: enter a new PIN twice, then set it.
+   change: check the current PIN, then the set flow.
+   remove: check the current PIN, then remove it. */
+var pinContext = null;
+var pinEntry = "";
+var pinFirstEntry = "";
+
+function pinDotsUpdate() {
+  var dots = document.querySelectorAll("#pinDots .pin-dot");
+  Array.prototype.forEach.call(dots, function (d, i) {
+    d.classList.toggle("filled", i < pinEntry.length);
+  });
+}
+
+function pinShowError(msg) {
+  var el = document.getElementById("pinError");
+  el.textContent = msg;
+  el.hidden = false;
+  var sheet = document.querySelector(".pin-sheet");
+  sheet.classList.remove("pin-shake");
+  void sheet.offsetWidth; /* restart the shake animation */
+  sheet.classList.add("pin-shake");
+}
+
+function pinClearError() {
+  document.getElementById("pinError").hidden = true;
+}
+
+function pinSetTitle(title, sub) {
+  document.getElementById("pinTitle").textContent = title;
+  document.getElementById("pinSub").textContent = sub || "";
+}
+
+function openPinSheet(ctx) {
+  pinContext = ctx;
+  pinEntry = "";
+  pinFirstEntry = "";
+  pinClearError();
+  pinDotsUpdate();
+  var p = findProfile(ctx.profileId);
+  var name = p ? p.name : "";
+  document.getElementById("pinClose").hidden = !ctx.allowCancel;
+  document.getElementById("pinForgotBtn").hidden = ctx.mode !== "unlock";
+  if (ctx.mode === "unlock") pinSetTitle("Enter PIN", "Unlock " + name + " to open this profile.");
+  else if (ctx.mode === "verify") pinSetTitle("Enter PIN", "Confirm the PIN for " + name + ".");
+  else if (ctx.mode === "set") pinSetTitle("Set a PIN", "Choose 4 digits to lock " + name + ".");
+  else if (ctx.mode === "change") pinSetTitle("Enter current PIN", "Confirm the current PIN for " + name + " first.");
+  else if (ctx.mode === "remove") pinSetTitle("Enter current PIN", "Confirm the current PIN for " + name + " to remove the lock.");
+  document.getElementById("pinSheet").hidden = false;
+}
+
+function pinKey(digit) {
+  if (!pinContext || pinEntry.length >= 4) return;
+  pinClearError();
+  pinEntry += digit;
+  pinDotsUpdate();
+  if (pinEntry.length === 4) {
+    var entered = pinEntry;
+    pinEntry = "";
+    pinDotsUpdate();
+    pinSubmit(entered);
+  }
+}
+
+function pinBackspace() {
+  if (!pinContext || !pinEntry.length) return;
+  pinEntry = pinEntry.slice(0, -1);
+  pinDotsUpdate();
+}
+
+function closePinSheet() {
+  if (pinContext && !pinContext.allowCancel) return;
+  document.getElementById("pinSheet").hidden = true;
+  pinContext = null;
+  pinEntry = "";
+}
+
+function pinSubmit(entered) {
+  var ctx = pinContext;
+  if (!ctx) return;
+  var p = findProfile(ctx.profileId);
+  if (!p) { closePinSheet(); return; }
+  if (ctx.mode === "unlock" || ctx.mode === "verify" || ctx.mode === "change" || ctx.mode === "remove") {
+    if (!checkProfilePin(p.id, entered)) {
+      pinShowError("Wrong PIN, try again.");
+      return;
+    }
+    if (ctx.mode === "unlock") {
+      document.getElementById("pinSheet").hidden = true;
+      pinContext = null;
+      enterProfile(p.id);
+      return;
+    }
+    if (ctx.mode === "verify") {
+      document.getElementById("pinSheet").hidden = true;
+      var cb = ctx.onSuccess;
+      pinContext = null;
+      if (cb) cb();
+      return;
+    }
+    if (ctx.mode === "remove") {
+      removeProfilePin(p.id);
+      document.getElementById("pinSheet").hidden = true;
+      pinContext = null;
+      renderProfileList();
+      toast("PIN removed for " + p.name);
+      return;
+    }
+    /* change: current PIN checked, move to the set flow. */
+    ctx.mode = "set";
+    ctx.step = "new";
+    pinSetTitle("Set a new PIN", "Choose 4 new digits for " + p.name + ".");
+    return;
+  }
+  if (ctx.mode === "set") {
+    if (ctx.step !== "confirm") {
+      pinFirstEntry = entered;
+      ctx.step = "confirm";
+      pinSetTitle("Confirm PIN", "Enter the same 4 digits again.");
+      return;
+    }
+    if (entered !== pinFirstEntry) {
+      ctx.step = "new";
+      pinFirstEntry = "";
+      pinSetTitle("Set a PIN", "Choose 4 digits to lock " + p.name + ".");
+      pinShowError("Those did not match, try again.");
+      return;
+    }
+    setProfilePin(p.id, entered);
+    document.getElementById("pinSheet").hidden = true;
+    pinContext = null;
+    renderProfileList();
+    toast("PIN set for " + p.name);
+  }
+}
+
+/* Forgot PIN: erase that profile's history, My List and likes and
+   remove the lock, so a forgotten PIN never exposes the profile and
+   never locks the app. Two taps, like the delete buttons. */
+var forgotArmed = false;
+
+function pinForgot() {
+  if (!pinContext) return;
+  var btn = document.getElementById("pinForgotBtn");
+  var p = findProfile(pinContext.profileId);
+  if (!p) return;
+  if (!forgotArmed) {
+    forgotArmed = true;
+    btn.textContent = "Tap again to erase this profile's data and remove its lock";
+    setTimeout(function () {
+      forgotArmed = false;
+      btn.textContent = "Forgot PIN?";
+    }, 5000);
+    return;
+  }
+  forgotArmed = false;
+  btn.textContent = "Forgot PIN?";
+  resetProfileData(p.id);
+  document.getElementById("pinSheet").hidden = true;
+  pinContext = null;
+  enterProfile(p.id);
+  toast("Profile reset, its history and My List were erased");
+}
+
+function renderProfileList() {
+  var wrap = document.getElementById("profileList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  profilesStore.profiles.forEach(function (p) {
+    var row = document.createElement("div");
+    row.className = "profile-row";
+    var locked = isPinLocked(p);
+    var isActive = p.id === profilesStore.activeId;
+    row.innerHTML =
+      '<span class="profile-avatar" style="background:' + esc(p.color) +
+      ";color:" + esc(accentTextFor(p.color)) + '">' + esc(avatarLetter(p.name)) + "</span>" +
+      '<span class="profile-row-main"><span class="profile-row-name">' + esc(p.name) + "</span>" +
+      '<span class="profile-row-sub">' +
+      (isActive ? "This profile" : "") +
+      (isActive && locked ? " · " : "") +
+      (locked ? "PIN locked" : "") +
+      (!isActive && !locked ? "Not locked" : "") + "</span></span>" +
+      '<span class="profile-row-btns"></span>';
+    var btns = row.querySelector(".profile-row-btns");
+    /* Locked profiles ask for their PIN before they can be changed,
+       so one person cannot rename, unlock or delete someone else's
+       profile. */
+    function gated(fn) {
+      if (locked) openPinSheet({ mode: "verify", profileId: p.id, allowCancel: true, onSuccess: fn });
+      else fn();
+    }
+    var renameBtn = document.createElement("button");
+    renameBtn.className = "btn small";
+    renameBtn.textContent = "Rename";
+    renameBtn.addEventListener("click", function () {
+      gated(function () { startProfileRename(row, p); });
+    });
+    btns.appendChild(renameBtn);
+    if (!locked) {
+      var setBtn = document.createElement("button");
+      setBtn.className = "btn small";
+      setBtn.textContent = "Set PIN";
+      setBtn.addEventListener("click", function () {
+        openPinSheet({ mode: "set", step: "new", profileId: p.id, allowCancel: true });
+      });
+      btns.appendChild(setBtn);
+    } else {
+      var changeBtn = document.createElement("button");
+      changeBtn.className = "btn small";
+      changeBtn.textContent = "Change PIN";
+      changeBtn.addEventListener("click", function () {
+        openPinSheet({ mode: "change", profileId: p.id, allowCancel: true });
+      });
+      btns.appendChild(changeBtn);
+      var removeBtn = document.createElement("button");
+      removeBtn.className = "btn small btn-ghost";
+      removeBtn.textContent = "Remove PIN";
+      removeBtn.addEventListener("click", function () {
+        openPinSheet({ mode: "remove", profileId: p.id, allowCancel: true });
+      });
+      btns.appendChild(removeBtn);
+    }
+    var delBtn = document.createElement("button");
+    delBtn.className = "btn small btn-danger";
+    delBtn.textContent = "Delete";
+    var armed = false;
+    delBtn.addEventListener("click", function () {
+      if (profilesStore.profiles.length <= 1) { toast("You need at least one profile"); return; }
+      if (!armed) {
+        armed = true;
+        delBtn.textContent = "Tap again to delete";
+        setTimeout(function () { armed = false; delBtn.textContent = "Delete"; }, 5000);
+        return;
+      }
+      gated(function () {
+        var wasActive = p.id === profilesStore.activeId;
+        deleteProfile(p.id);
+        renderProfileList();
+        updateProfileButton();
+        if (wasActive) {
+          applyTheme();
+          renderThemePresets();
+          syncHideWatchedBoxes();
+          if (homeLoaded) loadHome();
+          refreshPersonalViews();
+        }
+        toast("Profile deleted");
+      });
+    });
+    btns.appendChild(delBtn);
+    wrap.appendChild(row);
+  });
+  var addBtn = document.getElementById("addProfileBtn");
+  if (addBtn) {
+    addBtn.disabled = profilesStore.profiles.length >= MAX_PROFILES;
+    addBtn.textContent = profilesStore.profiles.length >= MAX_PROFILES ?
+      "5 profiles is the most" : "Add a profile";
+  }
+}
+
+function startProfileRename(row, p) {
+  var main = row.querySelector(".profile-row-main");
+  var input = document.createElement("input");
+  input.type = "text";
+  input.className = "profile-rename-input";
+  input.value = p.name;
+  input.maxLength = 20;
+  input.setAttribute("aria-label", "Profile name");
+  var save = document.createElement("button");
+  save.className = "btn small btn-primary";
+  save.textContent = "Save";
+  function commit() {
+    if (renameProfile(p.id, input.value)) {
+      renderProfileList();
+      updateProfileButton();
+      toast("Profile renamed");
+    } else {
+      toast("Pick a name first");
+      input.focus();
+    }
+  }
+  save.addEventListener("click", commit);
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") commit();
+    if (e.key === "Escape") renderProfileList();
+  });
+  main.innerHTML = "";
+  main.appendChild(input);
+  main.appendChild(save);
+  input.focus();
+  input.select();
+}
+
 /* ---------- Navigation ---------- */
 
 function showView(name) {
@@ -1726,7 +2481,7 @@ function showView(name) {
   if (name === "browse" && document.getElementById("browseGrid").children.length === 0) runBrowse(true);
   if (name === "mylist") renderMyList();
   if (name === "history") renderHistory();
-  if (name === "settings") renderThemePresets();
+  if (name === "settings") { renderThemePresets(); renderProfileList(); }
 }
 
 /* ---------- Pull to refresh (Home only) ---------- */
@@ -2025,7 +2780,16 @@ function init() {
     if (e.target === e.currentTarget) closePlayer();
   });
   document.addEventListener("keydown", function (e) {
+    /* The PIN pad takes digits and Backspace while it is open, so a
+       keyboard works as well as the on screen pad. */
+    if (!document.getElementById("pinSheet").hidden) {
+      if (/^[0-9]$/.test(e.key)) { pinKey(e.key); return; }
+      if (e.key === "Backspace") { pinBackspace(); return; }
+      if (e.key === "Escape") { closePinSheet(); return; }
+      return;
+    }
     if (e.key !== "Escape") return;
+    if (!document.getElementById("profilePicker").hidden) { closePicker(); return; }
     if (!document.getElementById("playerSheet").hidden) closePlayer();
     else if (!document.getElementById("detailsSheet").hidden) closeDetails();
   });
@@ -2112,7 +2876,7 @@ function init() {
   });
 
   document.getElementById("exportBtn").addEventListener("click", function () {
-    var blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    var blob = new Blob([JSON.stringify(buildBackup(), null, 2)], { type: "application/json" });
     var a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "archiveflix-backup.json";
@@ -2128,19 +2892,37 @@ function init() {
     reader.onload = function () {
       try {
         var data = JSON.parse(reader.result);
-        if (!data || typeof data !== "object" || !data.history) throw new Error("bad file");
-        state = data;
-        saveState();
+        var kind = parseBackup(data);
+        if (!kind) throw new Error("bad file");
         applyTheme();
         renderThemePresets();
+        renderProfileList();
         syncHideWatchedBoxes();
         keyInput.value = "";
         keyInput.placeholder = state.omdbKey ? "Key saved" : "Free OMDb API key";
         tmdbInput.value = "";
         tmdbInput.placeholder = state.tmdbKey ? "Key saved" : "Free TMDB API key";
-        if (homeLoaded) loadHome();
-        refreshPersonalViews();
-        toast("Backup imported");
+        if (kind === "v2") {
+          var imported = profilesStore.profiles;
+          var only = imported.length === 1 ? imported[0] : null;
+          if (only && !isPinLocked(only)) {
+            enterProfile(only.id);
+            toast("Backup imported");
+          } else {
+            /* More than one profile, or a locked one: pick a profile
+               before anything shows, so a locked profile's data is
+               never on screen without its PIN. */
+            profileEntered = false;
+            updateProfileButton();
+            openPicker(false);
+            toast("Backup imported, choose a profile");
+          }
+        } else {
+          updateProfileButton();
+          if (homeLoaded) loadHome();
+          refreshPersonalViews();
+          toast("Backup imported into this profile");
+        }
       } catch (err) {
         toast("That file is not an ARCHIVEFLIX backup");
       }
@@ -2149,11 +2931,12 @@ function init() {
     reader.readAsText(file);
   });
   document.getElementById("wipeBtn").addEventListener("click", function () {
-    state = defaultState();
-    saveState();
+    wipeAllData();
     applyTheme();
     renderThemePresets();
+    renderProfileList();
     syncHideWatchedBoxes();
+    updateProfileButton();
     keyInput.value = "";
     keyInput.placeholder = "Free OMDb API key";
     tmdbInput.value = "";
@@ -2164,7 +2947,64 @@ function init() {
     toast("Everything erased from this browser");
   });
 
-  loadHome();
+  /* Profile buttons, picker and PIN pad. */
+  document.getElementById("profileBtn").addEventListener("click", function () { openPicker(true); });
+  document.getElementById("pickerClose").addEventListener("click", closePicker);
+  document.getElementById("profileManageBtn").addEventListener("click", function () {
+    closePicker();
+    showView("settings");
+    var sec = document.getElementById("profilesSection");
+    if (sec) sec.scrollIntoView();
+  });
+  document.getElementById("profileCreateBtn").addEventListener("click", function () {
+    var input = document.getElementById("profileNameInput");
+    var p = createProfile(input.value);
+    if (!p) {
+      toast(profilesStore.profiles.length >= MAX_PROFILES ? "5 profiles is the most" : "Pick a name first");
+      return;
+    }
+    input.value = "";
+    document.getElementById("profileAddRow").hidden = true;
+    renderProfileTiles();
+    toast("Profile created");
+  });
+  document.getElementById("addProfileBtn").addEventListener("click", function () {
+    if (profilesStore.profiles.length >= MAX_PROFILES) { toast("5 profiles is the most"); return; }
+    document.getElementById("settingsAddRow").hidden = false;
+    document.getElementById("settingsProfileName").focus();
+  });
+  document.getElementById("settingsProfileCreate").addEventListener("click", function () {
+    var input = document.getElementById("settingsProfileName");
+    var p = createProfile(input.value);
+    if (!p) { toast("Pick a name first"); return; }
+    input.value = "";
+    document.getElementById("settingsAddRow").hidden = true;
+    renderProfileList();
+    toast("Profile created");
+  });
+  document.querySelectorAll(".pin-key[data-digit]").forEach(function (b) {
+    b.addEventListener("click", function () { pinKey(b.dataset.digit); });
+  });
+  document.getElementById("pinBackBtn").addEventListener("click", pinBackspace);
+  document.getElementById("pinClose").addEventListener("click", closePinSheet);
+  document.getElementById("pinForgotBtn").addEventListener("click", pinForgot);
+  document.getElementById("pinSheet").addEventListener("click", function (e) {
+    if (e.target === e.currentTarget) closePinSheet();
+  });
+
+  /* Who is watching? More than one profile gets the picker. One
+     profile opens straight in, with a PIN prompt when it is locked. */
+  updateProfileButton();
+  if (profilesStore.profiles.length > 1) {
+    openPicker(false);
+  } else {
+    var only = profilesStore.profiles[0];
+    if (isPinLocked(only)) {
+      openPinSheet({ mode: "unlock", profileId: only.id, allowCancel: false });
+    } else {
+      enterProfile(only.id);
+    }
+  }
 }
 
 /* Only boot in a real browser page that has the app markup. */
@@ -2208,6 +3048,37 @@ if (typeof module !== "undefined" && module.exports) {
     searchUrl: searchUrl,
     buildBrowseQuery: buildBrowseQuery,
     defaultState: defaultState,
+    defaultProfileData: defaultProfileData,
+    defaultDeviceState: defaultDeviceState,
+    hashPin: hashPin,
+    checkProfilePin: checkProfilePin,
+    isPinLocked: isPinLocked,
+    createProfile: createProfile,
+    renameProfile: renameProfile,
+    deleteProfile: deleteProfile,
+    setProfilePin: setProfilePin,
+    removeProfilePin: removeProfilePin,
+    resetProfileData: resetProfileData,
+    switchProfile: switchProfile,
+    activeProfile: activeProfile,
+    findProfile: findProfile,
+    buildBackup: buildBackup,
+    parseBackup: parseBackup,
+    wipeAllData: wipeAllData,
+    recordProgress: recordProgress,
+    MAX_PROFILES: MAX_PROFILES,
+    PROFILE_COLORS: PROFILE_COLORS,
+    /* Test hooks: seed the in-memory store and reload through the
+       real load path, so tests can drive migration and switching. */
+    testSeedStores: function (deviceJson, profilesJson) {
+      nodeStore = {};
+      if (deviceJson != null) nodeStore[STORE_KEY] = deviceJson;
+      if (profilesJson != null) nodeStore[PROFILES_KEY] = profilesJson;
+      loadStores();
+    },
+    testRawStore: function (key) { return storeGet(key); },
+    testGetState: function () { return state; },
+    testGetProfiles: function () { return profilesStore; },
     filterVisibleWith: function (items, st) {
       var saved = state;
       state = st;

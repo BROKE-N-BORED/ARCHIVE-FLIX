@@ -31,6 +31,10 @@
         <input type="checkbox" id="hideWatchedTop">
         <span>Hide watched</span>
       </label>
+      <button class="profile-btn" id="profileBtn" aria-label="Switch profile">
+        <span class="profile-avatar" id="profileAvatar">M</span>
+        <span id="profileName">Main</span>
+      </button>
       <button class="iconbtn" id="settingsBtn" aria-label="Settings">Settings</button>
     </div>
   </div>
@@ -174,6 +178,18 @@
       <button class="btn btn-ghost" id="accentClear">Use theme color</button>
     </label>
 
+    <h2 class="section-title" id="profilesSection">Profiles</h2>
+    <p class="sub">Up to 5 profiles. Each one has its own history, My List, likes and theme. API keys are shared across profiles on this device.</p>
+    <div id="profileList" class="profile-list"></div>
+    <div id="settingsAddRow" class="profile-add-row" hidden>
+      <input type="text" id="settingsProfileName" placeholder="Profile name" maxlength="20" aria-label="New profile name">
+      <button class="btn btn-primary" id="settingsProfileCreate">Create profile</button>
+    </div>
+    <div class="key-row">
+      <button class="btn btn-primary" id="addProfileBtn">Add a profile</button>
+    </div>
+    <p class="sub">A PIN is a casual lock screen for this device, not encryption. It keeps other people on this device from opening the profile. It does not hide the data from anyone who can read this browser's storage.</p>
+
     <h2 class="section-title">IMDb ratings (optional)</h2>
     <p class="sub">The Top IMDb row uses real IMDb ratings, and cards can show real movie posters, only when you add a free OMDb key. The key stays in this browser and is never sent anywhere except omdbapi.com. Without a key, that row falls back to Archive ratings and says so.</p>
     <div class="key-row">
@@ -200,7 +216,7 @@
     <p class="sub">On an Android phone: open this page in Chrome, tap the three dot menu, then Add to Home screen. On an iPhone: open this page in Safari, tap Share, then Add to Home Screen. The Install button above appears when your browser offers it.</p>
 
     <h2 class="section-title">Your data</h2>
-    <p class="sub">History, My List, likes and settings live in this browser only. Export a backup to move them to another browser or device.</p>
+    <p class="sub">History, My List, likes and settings live in this browser only. Export a backup to move them to another browser or device. A backup includes all profiles.</p>
     <div class="key-row">
       <button class="btn btn-primary" id="exportBtn">Export my data</button>
       <label class="btn btn-ghost filebtn">Import my data
@@ -240,6 +256,49 @@
       <button class="btn btn-ghost small" id="playerRestartBtn" hidden>Start from the beginning</button>
     </div>
     <p id="playerPlace" class="player-place" aria-live="polite"></p>
+  </div>
+</div>
+
+<!-- PROFILE PICKER -->
+<div id="profilePicker" class="picker-backdrop" hidden>
+  <div class="picker" role="dialog" aria-modal="true" aria-label="Choose a profile">
+    <button class="sheet-close" id="pickerClose" aria-label="Back to the app" hidden>Back</button>
+    <h2>Who is watching?</h2>
+    <p class="sub">Each profile has its own history, My List and theme.</p>
+    <div id="profileTiles" class="profile-tiles"></div>
+    <div id="profileAddRow" class="profile-add-row" hidden>
+      <input type="text" id="profileNameInput" placeholder="Profile name" maxlength="20" aria-label="New profile name">
+      <button class="btn btn-primary" id="profileCreateBtn">Create profile</button>
+    </div>
+    <button class="btn btn-ghost" id="profileManageBtn" hidden>Manage profiles</button>
+  </div>
+</div>
+
+<!-- PIN PAD -->
+<div id="pinSheet" class="sheet-backdrop pin-backdrop" hidden>
+  <div class="sheet pin-sheet" role="dialog" aria-modal="true" aria-label="Enter PIN">
+    <button class="sheet-close" id="pinClose" aria-label="Cancel">Cancel</button>
+    <h2 id="pinTitle">Enter PIN</h2>
+    <p class="sub" id="pinSub"></p>
+    <div class="pin-dots" id="pinDots" aria-live="polite">
+      <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+    </div>
+    <p class="pin-error" id="pinError" hidden></p>
+    <div class="pin-pad">
+      <button class="pin-key" data-digit="1">1</button>
+      <button class="pin-key" data-digit="2">2</button>
+      <button class="pin-key" data-digit="3">3</button>
+      <button class="pin-key" data-digit="4">4</button>
+      <button class="pin-key" data-digit="5">5</button>
+      <button class="pin-key" data-digit="6">6</button>
+      <button class="pin-key" data-digit="7">7</button>
+      <button class="pin-key" data-digit="8">8</button>
+      <button class="pin-key" data-digit="9">9</button>
+      <span></span>
+      <button class="pin-key" data-digit="0">0</button>
+      <button class="pin-key pin-key-back" id="pinBackBtn" aria-label="Delete last digit">Back</button>
+    </div>
+    <button class="btn btn-ghost pin-forgot" id="pinForgotBtn" hidden>Forgot PIN?</button>
   </div>
 </div>
 

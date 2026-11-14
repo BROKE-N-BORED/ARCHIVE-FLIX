@@ -37,7 +37,12 @@ saved only in your browser.
   History) still show them, since that is what they are for.
 - Six themes (Cinema Gold, Midnight, Forest, Sunset, Light, High Contrast)
   plus a custom accent color picker. Respects reduced motion settings.
-- Export and import your data as a JSON backup from Settings.
+- Profiles: up to 5, each with its own history, My List, likes and
+  theme, with an optional 4 digit PIN lock per profile. A PIN is a
+  casual lock screen for the device, not encryption. API keys are
+  shared across profiles on the device.
+- Export and import your data as a JSON backup from Settings. A backup
+  includes all profiles.
 
 ## Run it
 
@@ -115,14 +120,22 @@ shown with thanks.
 ## Privacy
 
 History, My List, likes, theme and the optional OMDb and TMDB keys live
-in your browser's local storage. Nothing is sent to any server except
-archive.org (for the catalog, playback and downloads), omdbapi.com
-(only when you saved a key, only for IMDb ratings and posters),
-api.themoviedb.org (only when you saved a key, only for posters) and
-commons.wikimedia.org (only for public domain poster search). The
-service worker keeps a copy of
+in your browser's local storage, kept per profile. Nothing is sent to
+any server except archive.org (for the catalog, playback and
+downloads), omdbapi.com (only when you saved a key, only for IMDb
+ratings and posters), api.themoviedb.org (only when you saved a key,
+only for posters) and commons.wikimedia.org (only for public domain
+poster search). The service worker keeps a copy of
 the app itself and a capped set of posters on your device so the app
 opens offline; it never stores your history or your key.
+
+Releases ship clean: no user data of any kind is in this repo. Nothing
+you watch, save or like is ever written into a release. It all stays in
+your browser, and the only way it leaves the browser is if you export a
+backup yourself from Settings. A PIN lock is a casual lock screen for
+the device, not encryption: it keeps other people on the device from
+opening the profile, it does not hide the data from anyone who can read
+the browser's storage.
 
 ## Honest limits
 
