@@ -229,7 +229,7 @@ a { color: var(--accent); }
 .ptr-indicator.ready { border-color: var(--accent); color: var(--accent); font-weight: 700; }
 
 /* Views */
-.view { display: none; max-width: 1280px; margin: 0 auto; padding: 0 16px 48px; }
+.view { display: none; max-width: 1280px; margin: 0 auto; padding: 0 24px 48px; }
 .view.active { display: block; }
 h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px; }
 .browse-head { margin-bottom: 20px; }
@@ -241,8 +241,8 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 /* Home view goes full width so the hero bleeds edge to edge;
    the rows and the note stay in the centered column. */
 #homeView { max-width: none; padding: 0 0 48px; }
-#homeView .rows { max-width: 1280px; margin: 0 auto; padding: 0 20px; }
-#homeView .source-note { max-width: 1280px; margin: 36px auto 8px; padding: 0 20px; }
+#homeView .rows { max-width: 1280px; margin: 0 auto; padding: 0 28px; }
+#homeView .source-note { max-width: 1280px; margin: 36px auto 8px; padding: 0 28px; }
 
 /* Hero: full-bleed backdrop art with a theme-aware gradient scrim.
    The scrim fades to the page background at the bottom and veils the
@@ -283,7 +283,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 .hero-content {
   position: relative;
   z-index: 2;
-  padding: 32px 32px 64px;
+  padding: 32px 40px 72px;
   max-width: 760px;
 }
 .hero-kicker {
@@ -387,27 +387,65 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 
 /* Rows */
 .rows { display: flex; flex-direction: column; gap: 8px; }
-.row { margin-top: 28px; }
+.row { margin-top: 36px; }
 /* .personal-shelf is a JS hook marking the Continue Watching, Watch
    Again and Because-you-watched rows; their look comes from .row. */
 .personal-shelf { scroll-margin-top: 76px; }
 .row-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-.row-head h2 { font-size: 1.35rem; font-weight: 800; margin: 0; }
+.row-head h2 { font-size: 1.45rem; font-weight: 800; margin: 0; }
 .row-sub { color: var(--muted); font-size: 0.88rem; margin: 0; }
 .row-scroll {
   display: flex;
-  gap: 12px;
+  gap: 16px;
   overflow-x: auto;
-  padding: 14px 4px 18px;
+  padding: 16px 4px 20px;
   scrollbar-width: thin;
   scroll-snap-type: x proximity;
 }
 .row-scroll::-webkit-scrollbar { height: 8px; }
 .row-scroll::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 4px; }
 
+/* Carousel arrows: translucent chevrons pinned to the row edges.
+   They fade in on hover on a computer, and briefly whenever the
+   row is scrolled or touched on a phone (JS adds .arrows-shown).
+   Disabled arrows stay invisible, so a row that fits, or an end
+   already reached, shows nothing. */
+.row-viewport { position: relative; }
+.row-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  width: 44px;
+  height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  font-size: 2rem;
+  line-height: 1;
+  padding: 0 0 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, background-color 0.15s;
+}
+.row-arrow-left { left: 2px; }
+.row-arrow-right { right: 2px; }
+.row-arrow:hover { background: rgba(0, 0, 0, 0.78); }
+@media (hover: hover) {
+  .row-viewport:hover .row-arrow:not([disabled]) { opacity: 1; pointer-events: auto; }
+}
+.row-viewport.arrows-shown .row-arrow:not([disabled]) { opacity: 1; pointer-events: auto; }
+.row-arrow[disabled] { opacity: 0; pointer-events: none; }
+
 /* Cards */
 .card {
-  flex: 0 0 162px;
+  flex: 0 0 192px;
   scroll-snap-align: start;
   background: var(--card);
   border: 1px solid var(--line);
@@ -494,10 +532,10 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
       color-mix(in srgb, var(--accent) 30%, var(--bg2)),
       var(--bg2) 60%);
 }
-.card-body { padding: 10px 12px 12px; }
+.card-body { padding: 12px 14px 14px; }
 .card-title {
   font-weight: 700;
-  font-size: 0.95rem;
+  font-size: 1rem;
   line-height: 1.25;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -529,8 +567,8 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 /* Grid (browse, my list) */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(162px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(192px, 1fr));
+  gap: 16px;
   margin-top: 16px;
 }
 .grid .card { flex: none; }
@@ -873,7 +911,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   border-radius: 16px;
   max-width: 780px;
   margin: 0 auto;
-  padding: 24px;
+  padding: 28px;
   position: relative;
   box-shadow: var(--shadow-lg);
 }
@@ -895,8 +933,8 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   font-weight: 700;
   z-index: 2;
 }
-.details-top { display: flex; gap: 20px; flex-wrap: wrap; }
-.details-poster-wrap { position: relative; width: 160px; aspect-ratio: 2 / 3; flex-shrink: 0; border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
+.details-top { display: flex; gap: 28px; flex-wrap: wrap; }
+.details-poster-wrap { position: relative; width: 200px; aspect-ratio: 2 / 3; flex-shrink: 0; border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
 .details-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 10px; }
 .details-info { flex: 1 1 260px; min-width: 0; }
 .details-info h2 { margin: 0 28px 8px 0; font-size: clamp(1.4rem, 4vw, 1.8rem); font-weight: 800; line-height: 1.2; }
@@ -917,6 +955,63 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   font-weight: 600;
 }
 .similar-head { font-size: 1.15rem; font-weight: 800; margin: 8px 0 0; }
+
+/* Episodes list in the details sheet. One tappable row per
+   episode: its number, its title, runtime and watch state, and a
+   Play or Resume action. Season groups stack under a source
+   heading, so a multi-file upload and its sibling uploads read
+   as two separate lists. */
+.episode-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.episode-source-head { font-size: 1.05rem; font-weight: 800; margin: 18px 0 2px; }
+.episode-source-head:first-child { margin-top: 6px; }
+.episode-group-head {
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 12px 0 2px;
+}
+.episode-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  background: var(--bg3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  color: var(--text);
+  text-align: left;
+  transition: border-color 0.15s, filter 0.15s;
+}
+.episode-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  filter: brightness(1.08);
+}
+.episode-num {
+  font-weight: 800;
+  color: var(--accent);
+  font-size: 0.9rem;
+  min-width: 56px;
+  flex-shrink: 0;
+}
+.episode-num:empty { min-width: 0; }
+.episode-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.episode-title { font-weight: 700; line-height: 1.3; }
+.episode-meta { color: var(--muted); font-size: 0.85rem; }
+.episode-current {
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--accent);
+  color: var(--accent-text);
+  border-radius: 999px;
+  padding: 3px 8px;
+  flex-shrink: 0;
+}
+.episode-play { font-weight: 800; color: var(--accent); flex-shrink: 0; }
 .player-title { margin: 0 70px 14px 0; font-size: 1.4rem; font-weight: 800; }
 .player-frame { aspect-ratio: 16 / 9; background: #000; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-lg); }
 .player-frame iframe { width: 100%; height: 100%; border: 0; }
@@ -948,10 +1043,10 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 }
 
 /* Skeleton + error */
-.skeleton-row { display: flex; gap: 12px; padding: 14px 4px; }
+.skeleton-row { display: flex; gap: 16px; padding: 16px 4px; }
 .skeleton-card {
-  flex: 0 0 162px;
-  height: 270px;
+  flex: 0 0 192px;
+  height: 300px;
   background: var(--bg2);
   border-radius: 12px;
   animation: skeleton-pulse 1.4s ease-in-out infinite;
@@ -969,6 +1064,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 }
 
 @media (max-width: 640px) {
+  .view { padding: 0 16px 48px; }
   .topbar-inner { gap: 8px 12px; padding: 10px 14px; }
   .wordmark { font-size: 1.3rem; }
   .mainnav {
@@ -982,9 +1078,9 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   .mainnav::-webkit-scrollbar { display: none; }
   .navbtn { flex-shrink: 0; }
   .ptr-indicator { top: 112px; }
-  .card { flex-basis: 134px; }
-  .skeleton-card { flex-basis: 134px; height: 240px; }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+  .card { flex-basis: 152px; }
+  .skeleton-card { flex-basis: 152px; height: 264px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(152px, 1fr)); gap: 12px; }
   .hero { min-height: 480px; }
   .hero-content { padding: 20px 20px 44px; }
   .hero-content h2 { font-size: clamp(1.9rem, 9vw, 2.4rem); }
@@ -992,7 +1088,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   #homeView .rows { padding: 0 16px; }
   #homeView .source-note { padding: 0 16px; }
   .filters { padding: 14px; }
-  .details-poster-wrap { width: 110px; }
+  .details-poster-wrap { width: 130px; }
   .sheet { padding: 18px 16px; }
   .profile-btn #profileName { display: none; }
   .profile-btn { padding: 5px; }

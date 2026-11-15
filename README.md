@@ -17,7 +17,13 @@ saved only in your browser.
   rating and six sort orders.
 - Details for every title: synopsis, director, year, runtime, Archive star
   rating, subject tags, More Like This, a Download button, and your saved
-  place in the film.
+  place in the film. Shows list their seasons and episodes: episodes
+  inside a series upload, and sibling episode uploads of the same show,
+  grouped by season where the Archive data carries one. Each episode
+  keeps its own saved place.
+- Rows scroll with translucent left and right arrows at their edges:
+  they appear when you hover over a row on a computer, and briefly
+  whenever you scroll or touch a row on a phone. Swiping still works.
 - Player plays the Archive's own video file right in the app and saves
   your place automatically as you watch, so you pick up exactly where
   you left off. When a film ends it is marked finished for you and you
@@ -157,6 +163,9 @@ the browser's storage.
   keep a simple manual place marker in the player.
 - Archive metadata is uploader supplied. Some titles, years and synopses
   are messy or missing, and a few uploads are mislabeled. The app shows
-  what the Archive returns.
+  what the Archive returns. The Archive has no season or episode fields,
+  so episode numbers come only from titles, identifiers and file names:
+  episodes with no number in the data show in a plain list, and a show
+  with no episode data anywhere gets no episode list at all.
 - Ratings shown as Archive ratings are Archive star ratings, not IMDb
   ratings. IMDb ratings appear only with an OMDb key, labeled as IMDb.

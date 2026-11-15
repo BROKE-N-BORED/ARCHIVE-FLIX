@@ -3,7 +3,7 @@
    calls always go to the network, and video files are never cached.
    No build step, no dependencies. */
 
-var SHELL_CACHE = "archiveflix-shell-v7";
+var SHELL_CACHE = "archiveflix-shell-v8";
 var POSTER_CACHE = "archiveflix-posters-v1";
 var SHELL_FILES = [
   "./",

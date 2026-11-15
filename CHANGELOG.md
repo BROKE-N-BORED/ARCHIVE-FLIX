@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## v1.5.0 - 2026-11-14
+
+- Shows now list their seasons and episodes in the details sheet. Two
+  real sources, both from the Archive: episodes inside a multi-file
+  series upload (Bonanza public domain episodes holds 30, Green Acres
+  Complete Series holds 169 across six seasons, Space 1999 Series 1
+  holds 24), and sibling episode uploads of the same show, found by
+  the show name in the title. Episodes group by season where the data
+  carries a season, and the rest show as a plain episode list. Tapping
+  an episode plays it, and each episode keeps its own saved place, so
+  resuming one episode never drops you into another.
+- The Archive has no series, season or episode metadata fields: numbers
+  live only in titles, identifiers and file names, as S01E02, S01 E02,
+  "Season 7, Episode 23", "Ep 2x08", "Episode # 18", "#9", or Ep01 in
+  the identifier. The app parses those and never invents a number that
+  is not in the data. Most per-episode uploads carry no number at all,
+  so most shows list episodes without season groups, and a show with
+  no episode data anywhere gets no episode list instead of a fake one.
+  Duplicate uploads of the same episode collapse to one row.
+- The layout has more breathing room everywhere: bigger cards, wider
+  gaps between cards and rows, more padding in the views, the hero and
+  the details sheet, and a larger details poster. Same Netflix look,
+  same Cinema Gold default, just less squished.
+- Rows have Netflix style carousel arrows: translucent chevrons at the
+  left and right edges that appear on hover on a computer and briefly
+  whenever a row is scrolled or touched on a phone. Tapping one scrolls
+  the row by a page of cards. An arrow hides when its end of the row is
+  reached, and both hide when a row fits without scrolling. Swiping
+  still works alongside. The More Like This row in details has them too.
+- The service worker cache is bumped to v8 so installed copies pick
+  up the new shell.
+
 ## v1.4.1 - 2026-11-14
 
 - Years are the film's real release year now, never the Archive

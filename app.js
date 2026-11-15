@@ -336,18 +336,22 @@ function pickDownloadFile(files) {
   return null;
 }
 
+/* True when a file is one a browser <video> element can play: MP4,
+   M4V, WebM or Ogg, and bigger than 1 MB so tiny samples never
+   count. MKV, MPEG and MOV do not play in most phone browsers. */
+function isPlayableFile(f) {
+  return !!(f && f.name && /\.(mp4|m4v|webm|ogv)$/i.test(f.name) &&
+    Number(f.size) > 1048576);
+}
+
 /* Pick a file a browser <video> element can actually play. Same idea as
    the download picker, but only web playable formats count: MP4 first
    (the 512kb one when there is one), then WebM or Ogg. MKV, MPEG and
    MOV files do not play in most phone browsers, so they are skipped. */
 function pickPlayableFile(files) {
   files = files || [];
-  function playable(f) {
-    return f && f.name && /\.(mp4|m4v|webm|ogv)$/i.test(f.name) &&
-      Number(f.size) > 1048576;
-  }
   var mp4s = files.filter(function (f) {
-    return playable(f) && /\.(mp4|m4v)$/i.test(f.name);
+    return isPlayableFile(f) && /\.(mp4|m4v)$/i.test(f.name);
   });
   if (mp4s.length) {
     var small = null;
@@ -358,12 +362,305 @@ function pickPlayableFile(files) {
     mp4s.sort(function (a, b) { return Number(a.size) - Number(b.size); });
     return mp4s[0];
   }
-  var others = files.filter(function (f) { return playable(f); });
+  var others = files.filter(function (f) { return isPlayableFile(f); });
   if (others.length) {
     others.sort(function (a, b) { return Number(a.size) - Number(b.size); });
     return others[0];
   }
   return null;
+}
+
+/* ---------- Seasons and episodes ---------- */
+/* How classic_tv episodes are actually represented, verified live
+   2026-11-14 against real records. There are NO series, season or
+   episode metadata fields on the Archive: season and episode
+   numbers live only in titles, identifiers and file names, as
+   free text. Episodes come two ways. Per-episode uploads, one item
+   per episode, titled "Show - Episode title" (Bonanza, Dragnet),
+   sometimes with a code: S01E02, S01 E02, S01- Ep.29, "Season 7,
+   Episode 23", "Ep 2x08", "Episode # 18", "#9", or Ep01 in the
+   identifier only. Most carry no number at all. And multi-file
+   series items, one item holding a whole show: Bonanza_pd (30
+   episodes, "Bonanza s01e19.mp4"), Green Acres Complete Series
+   (about 170 episodes, "Green Acres Season 1/Green Acres - 001 -
+   Oliver Buys A Farm.mp4", season in the folder, number and title
+   in the file), Space 1999 Series 1 (24 episodes, "Space 1999
+   S01E01 Breakaway.mp4", each twice, once with .ia in the name),
+   The Beverly Hillbillies (3 episodes, plain titles like
+   "Getting_Settled.mp4", each in four formats). So: group by
+   season where the data carries a season, show the rest as a flat
+   episode list, and NEVER invent a number that is not in the
+   data. Every function here is pure, so the node test can drive
+   it with fixtures taken from the real records above. */
+
+/* Season and episode numbers from a title, identifier or file
+   path. Returns { season, episode }, either null when the text
+   carries no number. A bare number is never guessed at. */
+function parseEpisodeRef(text) {
+  var t = String(text || "");
+  var m;
+  m = t.match(/S(\d{1,2})\s*[- ]?\s*E(?:p(?:isode)?\.?)?\s*(\d{1,3})/i);
+  if (m) return { season: Number(m[1]), episode: Number(m[2]) };
+  m = t.match(/Season\s*(\d{1,2})\b[^0-9]{0,25}?Episode\s*(\d{1,3})/i);
+  if (m) return { season: Number(m[1]), episode: Number(m[2]) };
+  m = t.match(/(\d{1,2})x(\d{1,3})\b/);
+  if (m) return { season: Number(m[1]), episode: Number(m[2]) };
+  var season = null;
+  m = t.match(/Season\s*(\d{1,2})/i);
+  if (m) season = Number(m[1]);
+  m = t.match(/(?:^|[^A-Za-z0-9])Ep\.?\s*(\d{1,3})/i);
+  if (m) return { season: season, episode: Number(m[1]) };
+  m = t.match(/Episode\s*#?\s*(\d{1,3})/i);
+  if (m) return { season: season, episode: Number(m[1]) };
+  m = t.match(/#\s*(\d{1,3})\b/);
+  if (m) return { season: season, episode: Number(m[1]) };
+  /* Numbered files in a season folder: "Season 1/... - 001 - Title". */
+  if (season != null) {
+    var base = t.split("/").pop();
+    m = base.match(/-\s*0*(\d{1,3})\s*-/);
+    if (m) return { season: season, episode: Number(m[1]) };
+    return { season: season, episode: null };
+  }
+  return { season: null, episode: null };
+}
+
+/* The episode's own title, with the show name, season and episode
+   codes, year and file extension stripped. "" when the text
+   carries no episode title of its own. */
+function episodeTitleFrom(text, showName) {
+  var t = String(text || "");
+  /* File paths ("Season 1/... - 001 - Title.mp4") reduce to the base
+     name; plain titles keep their whole text, since a title can
+     carry a slash of its own ("The Big Seventeen w/commercials").
+     Only a real media extension counts as a file: "Ep.29" ends in
+     ".29", which is an episode number, not an extension. */
+  if (/\.(mp4|m4v|webm|ogv|mkv|avi|mov|mpg|mpeg|jpg|jpeg|png|webp)$/i.test(t)) {
+    t = t.split("/").pop();
+    t = t.replace(/\.[A-Za-z0-9]{2,4}$/, "");
+    t = t.replace(/\.ia$/i, "");
+  }
+  t = t.replace(/_/g, " ");
+  t = t.replace(/["\u201c\u201d]/g, "");
+  t = t.replace(/S\d{1,2}\s*[- ]?\s*E(?:p(?:isode)?\.?)?\s*\d{1,3}/ig, " ");
+  t = t.replace(/Season\s*\d{1,2}\b[^0-9]{0,25}?Episode\s*\d{1,3}/ig, " ");
+  t = t.replace(/\bEp\.?\s*\d{1,2}x\d{1,3}\b/ig, " ");
+  t = t.replace(/\b\d{1,2}x\d{1,3}\b/g, " ");
+  t = t.replace(/(?:^|[^A-Za-z0-9])Ep\.?\s*\d{1,3}/ig, " ");
+  t = t.replace(/Episode\s*#?\s*\d{1,3}/ig, " ");
+  t = t.replace(/#\s*\d{1,3}\b/g, " ");
+  t = t.replace(/[\(\[]\s*(?:19|20)\d{2}\s*[\)\]]/g, " ");
+  t = t.replace(/-\s*0*\d{1,3}\s*-/g, " ");
+  t = t.replace(/\(TV Rip\)/ig, " ");
+  if (showName) {
+    /* The same show is spelled with and without "The" across
+       uploads ("The Beverly Hillbillies" vs "Beverly Hillbillies
+       Ep01 ..."), so strip both spellings. */
+    var names = [showName];
+    if (/^the\s+/i.test(showName)) names.push(showName.replace(/^the\s+/i, ""));
+    else names.push("The " + showName);
+    names.forEach(function (n) {
+      var rx = new RegExp("^" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
+        "\\s*[-:\u2013\u2014]?\\s*", "i");
+      t = t.replace(rx, "");
+    });
+  }
+  t = t.replace(/\s+/g, " ").trim()
+    .replace(/^[-:\u2013\u2014\s]+/, "").replace(/[-:\u2013\u2014\s]+$/, "").trim();
+  return t;
+}
+
+/* Subject tags that name a medium, not a show. */
+var GENERIC_SHOW_SUBJECTS = ["tv", "series", "television", "classic tv",
+  "classic television", "public domain", "movies", "feature films",
+  "feature film", "movingimage", "video", "vhs", "dvd", "color", "sound"];
+
+/* The show's name from an item's title, for finding its sibling
+   episodes. Strips years, season and episode codes, air dates and
+   "Complete Series" style suffixes, then takes the part before
+   the first separator, or a subject tag the title starts with, or
+   a short whole title. Returns null when no show name can be
+   trusted, so no sibling search runs on a guess. */
+function deriveShowName(item, subjects) {
+  var t = cleanTitle(item.title || "");
+  if (/^\s*\d{4}s classic tv\s*$/i.test(t)) return null;
+  t = t.replace(/["\u201c\u201d]/g, "");
+  t = t.replace(/[\(\[]\s*(?:19|20)\d{2}\s*[\)\]]/g, " ");
+  t = t.replace(/S\d{1,2}\s*[- ]?\s*E(?:p(?:isode)?\.?)?\s*\d{1,3}/ig, " ");
+  t = t.replace(/Season\s*\d{1,2}\b[^0-9]{0,25}?Episode\s*\d{1,3}/ig, " ");
+  t = t.replace(/\b\d{1,2}x\d{1,3}\b/g, " ");
+  t = t.replace(/(?:^|[^A-Za-z0-9])Ep\.?\s*\d{1,3}/ig, " ");
+  t = t.replace(/Episode\s*#?\s*\d{1,3}/ig, " ");
+  t = t.replace(/#\s*\d{1,3}\b/g, " ");
+  t = t.replace(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/ig, " ");
+  t = t.replace(/\s*[\(\[]?(Complete Series|TV Show|TV Series|public domain episodes)[^\)\]]*[\)\]]?\s*$/i, "");
+  t = t.replace(/\s+/g, " ").trim().replace(/[-:\u2013\u2014\s]+$/, "").trim();
+  var parts = t.split(/\s+[-:\u2013\u2014]\s+|:\s+/);
+  if (parts.length > 1) {
+    var first = parts[0].trim();
+    if (first.length >= 2 && first.length <= 40) return first;
+  }
+  var lower = t.toLowerCase();
+  var found = null;
+  (subjects || []).forEach(function (s) {
+    if (found) return;
+    var sub = String(s || "").trim();
+    if (!sub || sub.length < 3 || sub.length > 40) return;
+    if (GENERIC_SHOW_SUBJECTS.indexOf(sub.toLowerCase()) !== -1) return;
+    if (lower.indexOf(sub.toLowerCase()) === 0) found = sub;
+  });
+  if (found) return found;
+  if (t.length >= 2 && t.length <= 32 && t.split(/\s+/).length <= 4) return t;
+  return null;
+}
+
+/* "S1 E19", "Episode 18", "Season 1", or "" when the episode
+   carries no number at all. */
+function episodeLabel(ep) {
+  if (ep.season != null && ep.episode != null) return "S" + ep.season + " E" + ep.episode;
+  if (ep.episode != null) return "Episode " + ep.episode;
+  if (ep.season != null) return "Season " + ep.season;
+  return "";
+}
+
+/* Group episodes by season, seasons in order, unnumbered episodes
+   last in their own group. Inside a group, numbered episodes come
+   first in episode order, then unnumbered ones by title. */
+function groupEpisodes(episodes) {
+  var groups = {};
+  var order = [];
+  (episodes || []).forEach(function (ep) {
+    var key = ep.season != null ? "s" + ep.season : "other";
+    if (!groups[key]) { groups[key] = { season: ep.season, episodes: [] }; order.push(key); }
+    groups[key].episodes.push(ep);
+  });
+  var out = order.map(function (k) { return groups[k]; });
+  out.forEach(function (g) {
+    g.episodes.sort(function (a, b) {
+      if (a.episode != null && b.episode != null) return a.episode - b.episode;
+      if (a.episode != null) return -1;
+      if (b.episode != null) return 1;
+      return (a.title || "").localeCompare(b.title || "");
+    });
+  });
+  out.sort(function (a, b) {
+    if (a.season == null) return 1;
+    if (b.season == null) return -1;
+    return a.season - b.season;
+  });
+  return out;
+}
+
+/* The history key for one episode inside a multi-file item, so
+   each episode keeps its own place instead of sharing the show's. */
+function episodeHistoryId(itemId, file) {
+  return itemId + "::" + file;
+}
+
+/* The key an item's progress is stored under: a file episode's own
+   key, otherwise the item id. */
+function historyKey(item) {
+  if (!item) return null;
+  return item.historyId || item.id;
+}
+
+/* One episode per video file base name inside a multi-file series
+   item. Same episode in several formats (MP4, MPG, OGV, AVI, the
+   .ia duplicate, the 512kb copy) collapses to one episode, played
+   from its best playable file. Episodes with no playable file are
+   left out, so every listed episode can actually play. */
+function episodeBaseName(name) {
+  var base = String(name || "").replace(/\.(mp4|m4v|webm|ogv|mkv|avi|mov|mpg|mpeg)$/i, "");
+  base = base.replace(/\.ia$/i, "").replace(/_512kb$/i, "");
+  return base;
+}
+
+function episodesFromFiles(itemId, showName, files) {
+  var byBase = {};
+  (files || []).forEach(function (f) {
+    if (!f || !f.name) return;
+    if (!/\.(mp4|m4v|webm|ogv|mkv|avi|mov|mpg|mpeg)$/i.test(f.name)) return;
+    if (Number(f.size) <= 1048576) return;
+    var base = episodeBaseName(f.name);
+    if (!byBase[base]) byBase[base] = [];
+    byBase[base].push(f);
+  });
+  var out = [];
+  Object.keys(byBase).forEach(function (base) {
+    var group = byBase[base];
+    var playable = pickPlayableFile(group);
+    if (!playable) return;
+    var ref = parseEpisodeRef(group[0].name);
+    out.push({
+      itemId: itemId,
+      file: playable.name,
+      historyId: episodeHistoryId(itemId, playable.name),
+      season: ref.season,
+      episode: ref.episode,
+      title: episodeTitleFrom(group[0].name, showName),
+      length: Number(playable.length) || 0,
+      size: Number(playable.size) || 0
+    });
+  });
+  return out;
+}
+
+/* Titles that name a series container, not one episode. */
+var EPISODE_CONTAINER_TITLES = ["public domain episodes", "complete series",
+  "complete collection", "tv show", "tv series", "all episodes", "collection"];
+
+/* Per-episode uploads (search results) as episodes. The same
+   episode uploaded twice collapses to one row: by season and
+   episode number when the data carries them, by episode title
+   otherwise, and a numbered copy replaces an unnumbered copy of
+   the same episode title (the same upload often exists both ways:
+   "Bonanza - Bitter Water" and "Bonanza - Bitter Water S01-
+   Ep.29"). Results arrive most downloaded first, so the kept copy
+   is the most popular one. Items that carry neither a number nor
+   an episode title, and series containers like "Dragnet (1951)"
+   or "Bonanza public domain episodes", are not episodes and are
+   left out. */
+function episodesFromItems(items, currentId, showName) {
+  var seenSe = {};
+  var titleIndex = {};
+  var out = [];
+  (items || []).forEach(function (it) {
+    if (!it || !it.id) return;
+    var ref = parseEpisodeRef(it.title);
+    if (ref.season == null && ref.episode == null) ref = parseEpisodeRef(it.id);
+    var title = episodeTitleFrom(it.title, showName);
+    if (!title && ref.season == null && ref.episode == null) return;
+    if (EPISODE_CONTAINER_TITLES.indexOf(title.toLowerCase()) !== -1) return;
+    var seKey = (ref.season != null || ref.episode != null)
+      ? "se:" + (ref.season == null ? "" : ref.season) + ":" +
+        (ref.episode == null ? "" : ref.episode)
+      : null;
+    var tKey = title ? "t:" + title.toLowerCase() : null;
+    if (seKey && seenSe[seKey]) return;
+    var ep = {
+      itemId: it.id,
+      file: null,
+      historyId: null,
+      season: ref.season,
+      episode: ref.episode,
+      title: title,
+      year: it.year != null ? it.year : null,
+      downloads: it.downloads || 0,
+      current: it.id === currentId
+    };
+    if (tKey && titleIndex[tKey] != null) {
+      var existing = out[titleIndex[tKey]];
+      if (existing.season == null && existing.episode == null) {
+        if (seKey) { out[titleIndex[tKey]] = ep; seenSe[seKey] = true; }
+        return;
+      }
+      if (!seKey) return;
+      /* Same title, different numbers: a real second episode. */
+    }
+    if (seKey) seenSe[seKey] = true;
+    if (tKey && titleIndex[tKey] == null) titleIndex[tKey] = out.length;
+    out.push(ep);
+  });
+  return out;
 }
 
 /* ---------- State (localStorage) ---------- */
@@ -804,11 +1101,17 @@ function filterVisible(items) {
    starts from the beginning. Older entries without a position keep
    working: they just have the progress fraction. */
 function recordProgress(item, progress, position, duration) {
-  var prev = state.history[item.id];
+  /* A file episode stores its progress under its own key, so each
+     episode keeps its own place. The entry still carries the real
+     item id, so its card opens the show and its poster resolves. */
+  var key = historyKey(item);
+  var prev = state.history[key];
   var wasFinished = !!(prev && prev.progress >= 1);
   var now = Date.now();
-  state.history[item.id] = {
+  state.history[key] = {
     id: item.id,
+    historyId: key,
+    file: item.file || null,
     title: item.title,
     year: item.year,
     type: item.type,
@@ -1462,7 +1765,7 @@ function cardEl(item) {
   btn.className = "card";
   btn.setAttribute("aria-label", item.title + (item.year ? " (" + item.year + ")" : ""));
   var badge = ratingBadge(item);
-  var h = item.id && state.history[item.id];
+  var h = item.id && state.history[historyKey(item)];
   var prog = h ? h.progress : 0;
   var meta = [item.year ? String(item.year) : "", typeLabel(item.type)].filter(Boolean).join(" · ");
   btn.innerHTML =
@@ -1488,13 +1791,88 @@ function cardEl(item) {
   return btn;
 }
 
+/* Carousel arrows: translucent left and right arrows at the edges
+   of each row, Netflix style. They appear on hover on a computer,
+   and briefly whenever the row is scrolled or touched on a phone,
+   where there is no hover. Tapping one scrolls the row by a page
+   of cards; swiping still works alongside. An arrow is disabled
+   when its end of the row is reached, and both stay hidden when
+   the row fits without scrolling. */
 function rowEl(title, subtitle) {
   var section = document.createElement("section");
   section.className = "row";
   section.innerHTML = '<div class="row-head"><h2>' + esc(title) + "</h2>" +
     (subtitle ? '<p class="row-sub">' + esc(subtitle) + "</p>" : "") + "</div>" +
-    '<div class="row-scroll"></div>';
+    '<div class="row-viewport"><button class="row-arrow row-arrow-left" type="button" ' +
+    'aria-label="Scroll row left" disabled>&#8249;</button>' +
+    '<div class="row-scroll"></div>' +
+    '<button class="row-arrow row-arrow-right" type="button" ' +
+    'aria-label="Scroll row right" disabled>&#8250;</button></div>';
+  wireRowArrows(section.querySelector(".row-viewport"));
   return section;
+}
+
+/* Pure arrow state, for the node test: given a row's scroll
+   position, which arrows can move it? */
+function rowArrowState(scrollLeft, clientWidth, scrollWidth) {
+  var canScroll = scrollWidth > clientWidth + 4;
+  return {
+    left: canScroll && scrollLeft > 4,
+    right: canScroll && scrollLeft + clientWidth < scrollWidth - 4,
+    any: canScroll
+  };
+}
+
+/* One page of cards, leaving a peek of the next card. */
+function rowScrollStep(clientWidth) {
+  return Math.max(120, Math.round(clientWidth * 0.9));
+}
+
+function updateRowArrows(viewport) {
+  if (!viewport) return;
+  var scroll = viewport.querySelector(".row-scroll");
+  var left = viewport.querySelector(".row-arrow-left");
+  var right = viewport.querySelector(".row-arrow-right");
+  if (!scroll || !left || !right) return;
+  var st = rowArrowState(scroll.scrollLeft, scroll.clientWidth, scroll.scrollWidth);
+  left.disabled = !st.left;
+  right.disabled = !st.right;
+}
+
+var rowArrowsResizeWired = false;
+
+function wireRowArrows(viewport) {
+  if (!viewport || viewport.getAttribute("data-arrows-wired")) return;
+  viewport.setAttribute("data-arrows-wired", "1");
+  var scroll = viewport.querySelector(".row-scroll");
+  var left = viewport.querySelector(".row-arrow-left");
+  var right = viewport.querySelector(".row-arrow-right");
+  if (!scroll || !left || !right) return;
+  left.addEventListener("click", function () {
+    scroll.scrollBy({ left: -rowScrollStep(scroll.clientWidth), behavior: "smooth" });
+  });
+  right.addEventListener("click", function () {
+    scroll.scrollBy({ left: rowScrollStep(scroll.clientWidth), behavior: "smooth" });
+  });
+  var hideTimer = null;
+  function showBriefly() {
+    viewport.classList.add("arrows-shown");
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(function () { viewport.classList.remove("arrows-shown"); }, 2400);
+  }
+  scroll.addEventListener("scroll", function () {
+    updateRowArrows(viewport);
+    showBriefly();
+  });
+  scroll.addEventListener("touchstart", showBriefly, { passive: true });
+  if (!rowArrowsResizeWired) {
+    rowArrowsResizeWired = true;
+    window.addEventListener("resize", function () {
+      var viewports = document.querySelectorAll(".row-viewport");
+      Array.prototype.forEach.call(viewports, function (v) { updateRowArrows(v); });
+    });
+  }
+  updateRowArrows(viewport);
 }
 
 function fillRow(section, items, emptyText) {
@@ -1505,9 +1883,11 @@ function fillRow(section, items, emptyText) {
     p.className = "row-error";
     p.textContent = emptyText || "Nothing here yet.";
     scroll.appendChild(p);
+    updateRowArrows(section.querySelector(".row-viewport"));
     return;
   }
   items.forEach(function (it) { scroll.appendChild(cardEl(it)); });
+  updateRowArrows(section.querySelector(".row-viewport"));
 }
 
 function rowError(section, retry) {
@@ -1522,6 +1902,7 @@ function rowError(section, retry) {
   b.addEventListener("click", retry);
   scroll.appendChild(p);
   scroll.appendChild(b);
+  updateRowArrows(section.querySelector(".row-viewport"));
 }
 
 /* Expandable descriptions: long text is clamped with a Read more toggle
@@ -1741,7 +2122,8 @@ function continueWatchingItems(adultOnly) {
     .sort(function (a, b) { return b.lastWatchedAt - a.lastWatchedAt; })
     .map(function (h) {
       return { id: h.id, title: h.title, year: storedYear(h), type: h.type,
-        subjects: h.subjects || [], rating: null, downloads: 0 };
+        subjects: h.subjects || [], rating: null, downloads: 0,
+        file: h.file || null, historyId: h.historyId || null };
     });
 }
 
@@ -1753,7 +2135,8 @@ function watchAgainItems(adultOnly) {
     .sort(function (a, b) { return b.lastWatchedAt - a.lastWatchedAt; })
     .map(function (h) {
       return { id: h.id, title: h.title, year: storedYear(h), type: h.type,
-        subjects: h.subjects || [], rating: null, downloads: 0 };
+        subjects: h.subjects || [], rating: null, downloads: 0,
+        file: h.file || null, historyId: h.historyId || null };
     });
 }
 
@@ -2093,7 +2476,7 @@ function openDetails(item) {
     if (detYear == null) detYear = item.year;
     var year = detYear != null ? String(detYear) : "";
     var creator = toArray(m.creator)[0] ? String(toArray(m.creator)[0]) : item.creator;
-    var h = state.history[item.id];
+    var h = state.history[historyKey(item)];
     var progress = h ? h.progress : 0;
     var inList = inMyList(item.id);
     var reaction = reactionOf(item.id);
@@ -2139,7 +2522,14 @@ function openDetails(item) {
       '<div class="place-row"><p class="sub">' + esc(placeText(h)) +
       " Your place is saved automatically as you watch.</p></div>" +
       "</div></div>" +
-      '<h3 class="similar-head">More Like This</h3><div class="row-scroll" id="similarRow"></div>';
+      '<div id="episodeSection" hidden><h3 class="similar-head">Episodes</h3>' +
+      '<div id="episodeList" class="episode-list"></div></div>' +
+      '<h3 class="similar-head">More Like This</h3>' +
+      '<div class="row-viewport"><button class="row-arrow row-arrow-left" type="button" ' +
+      'aria-label="Scroll row left" disabled>&#8249;</button>' +
+      '<div class="row-scroll" id="similarRow"></div>' +
+      '<button class="row-arrow row-arrow-right" type="button" ' +
+      'aria-label="Scroll row right" disabled>&#8250;</button></div>';
 
     var detImg = body.querySelector(".details-poster");
     if (detImg) {
@@ -2165,6 +2555,8 @@ function openDetails(item) {
       openDetails(item);
     });
     wireExpandableDescs(body);
+    wireRowArrows(body.querySelector(".row-viewport"));
+    renderEpisodeSection(item, files, subjects);
 
     var similarRow = document.getElementById("similarRow");
     var topSub = subjects[0];
@@ -2182,11 +2574,14 @@ function openDetails(item) {
           }).slice(0, 12);
           if (!sims.length) {
             similarRow.innerHTML = '<p class="row-error">No close matches found.</p>';
+            updateRowArrows(similarRow.closest(".row-viewport"));
             return;
           }
           sims.forEach(function (it) { similarRow.appendChild(cardEl(it)); });
+          updateRowArrows(similarRow.closest(".row-viewport"));
         }).catch(function () {
           similarRow.innerHTML = '<p class="row-error">Could not load similar titles.</p>';
+          updateRowArrows(similarRow.closest(".row-viewport"));
         });
     } else {
       similarRow.innerHTML = '<p class="row-error">No subject tags to match on.</p>';
@@ -2202,6 +2597,109 @@ function closeDetails() {
   document.getElementById("detailsSheet").hidden = true;
   document.body.style.overflow = "";
   currentDetails = null;
+}
+
+/* ---------- Episodes in the details sheet ---------- */
+/* Two sources, both real Archive data. A multi-file series item
+   lists the episodes inside its own upload, grouped by season
+   where the file names carry one. A per-episode upload lists its
+   sibling uploads of the same show, found by the show name in the
+   title. Either block only appears when it has episodes to show;
+   a show with no episode data anywhere gets no Episodes section
+   at all, instead of a fake one. */
+
+function episodeRowEl(ep, showItem, showName) {
+  var btn = document.createElement("button");
+  btn.className = "episode-row";
+  btn.type = "button";
+  var h = state.history[ep.historyId || ep.itemId];
+  var prog = h ? h.progress : 0;
+  var label = episodeLabel(ep);
+  var title = ep.title || label || "Untitled episode";
+  var meta = [];
+  if (ep.length) meta.push(formatRuntime(ep.length));
+  if (ep.year) meta.push(String(ep.year));
+  if (prog >= 1) meta.push("Watched");
+  else if (prog > 0) meta.push(Math.round(prog * 100) + "% watched");
+  btn.innerHTML =
+    '<span class="episode-num">' + esc(label || "") + "</span>" +
+    '<span class="episode-main"><span class="episode-title">' + esc(title) + "</span>" +
+    (meta.length ? '<span class="episode-meta">' + esc(meta.join(" · ")) + "</span>" : "") + "</span>" +
+    (ep.current ? '<span class="episode-current">This one</span>' : "") +
+    '<span class="episode-play">' + (prog >= 1 ? "Watch Again" : (prog > 0 ? "Resume" : "Play")) + "</span>";
+  btn.setAttribute("aria-label", title + (label && ep.title ? " (" + label + ")" : ""));
+  btn.addEventListener("click", function () {
+    var name = showName || showItem.title;
+    openPlayer({
+      id: ep.itemId,
+      title: name + (label ? " " + label : "") + (ep.title ? ": " + ep.title : ""),
+      year: ep.year != null ? ep.year : showItem.year,
+      type: "show",
+      subjects: showItem.subjects || [],
+      file: ep.file || null,
+      historyId: ep.historyId || null
+    });
+  });
+  return btn;
+}
+
+function renderEpisodeSection(item, files, subjects) {
+  var section = document.getElementById("episodeSection");
+  var list = document.getElementById("episodeList");
+  if (!section || !list || item.type !== "show") return;
+  var showName = deriveShowName(item, subjects);
+  var own = episodesFromFiles(item.id, showName, files);
+  var shown = false;
+
+  function appendBlock(heading, episodes) {
+    if (!episodes.length) return;
+    var groups = groupEpisodes(episodes);
+    var head = document.createElement("h4");
+    head.className = "episode-source-head";
+    head.textContent = heading;
+    list.appendChild(head);
+    groups.forEach(function (g) {
+      var label = g.season != null ? "Season " + g.season :
+        (groups.length > 1 ? "Other episodes" : "Episodes");
+      var gh = document.createElement("h5");
+      gh.className = "episode-group-head";
+      gh.textContent = label + " (" + g.episodes.length + ")";
+      list.appendChild(gh);
+      g.episodes.forEach(function (ep) {
+        list.appendChild(episodeRowEl(ep, item, showName));
+      });
+    });
+    shown = true;
+    section.hidden = false;
+  }
+
+  appendBlock("Episodes in this upload", own);
+  if (!showName) return;
+  var note = null;
+  if (!own.length) {
+    note = document.createElement("p");
+    note.className = "row-error";
+    note.textContent = "Looking for episodes of " + showName + "...";
+    list.appendChild(note);
+    section.hidden = false;
+  }
+  /* Sibling uploads of the same show. The normal adult exclusion
+     applies here, so an adult tagged upload can never land in a
+     show's episode list. */
+  searchArchive('collection:classic_tv AND title:"' + showName.replace(/"/g, "") + '"',
+    { rows: 100, sort: "downloads desc", type: "show" })
+    .then(function (res) {
+      if (note) note.remove();
+      /* The sheet may have closed or moved on to another title. */
+      if (document.getElementById("detailsSheet").hidden) return;
+      if (!currentDetails || currentDetails.id !== item.id) return;
+      appendBlock("More episodes of " + showName,
+        episodesFromItems(res.items, item.id, showName));
+      if (!shown) section.hidden = true;
+    }).catch(function () {
+      if (note) note.remove();
+      if (!shown) section.hidden = true;
+    });
 }
 
 /* ---------- Player sheet ---------- */
@@ -2236,7 +2734,7 @@ function saveVideoPositionThrottled() {
 
 function updatePlayerPlace() {
   var el = document.getElementById("playerPlace");
-  var h = currentPlayer && state.history[currentPlayer.id];
+  var h = currentPlayer && state.history[historyKey(currentPlayer)];
   if (!h || h.progress <= 0) {
     el.textContent = "Not started yet.";
     return;
@@ -2280,7 +2778,18 @@ function openPlayer(item) {
   updatePlayerPlace();
   getMetadata(item.id).then(function (meta) {
     if (!currentPlayer || currentPlayer.id !== item.id) return;
-    var file = pickPlayableFile(meta.files || []);
+    var file = null;
+    if (item.file) {
+      /* One episode inside a multi-file series item: play that
+         file, not the item's default pick. */
+      var files = meta.files || [];
+      for (var i = 0; i < files.length; i++) {
+        if (files[i] && files[i].name === item.file) { file = files[i]; break; }
+      }
+      if (file && !isPlayableFile(file)) file = null;
+    } else {
+      file = pickPlayableFile(meta.files || []);
+    }
     if (file) startNativePlayer(item, file);
     else startEmbedPlayer(item);
   }).catch(function () {
@@ -2301,7 +2810,7 @@ function startNativePlayer(item, file) {
   frame.appendChild(video);
   currentVideo = video;
   setPlayerMode("video");
-  var saved = state.history[item.id];
+  var saved = state.history[historyKey(item)];
   var resumed = false;
   video.addEventListener("loadedmetadata", function () {
     if (resumed) return;
@@ -2421,7 +2930,8 @@ function renderHistory() {
     return;
   }
   entries.forEach(function (h) {
-    var item = { id: h.id, title: h.title, year: storedYear(h), type: h.type, subjects: h.subjects || [] };
+    var item = { id: h.id, title: h.title, year: storedYear(h), type: h.type, subjects: h.subjects || [],
+      file: h.file || null, historyId: h.historyId || null };
     var div = document.createElement("div");
     div.className = "history-item";
     div.innerHTML =
@@ -2440,7 +2950,7 @@ function renderHistory() {
     div.querySelector('[data-act="play"]').addEventListener("click", function () { openPlayer(item); });
     div.querySelector('[data-act="details"]').addEventListener("click", function () { openDetails(item); });
     div.querySelector('[data-act="remove"]').addEventListener("click", function () {
-      delete state.history[h.id];
+      delete state.history[h.historyId || h.id];
       saveState();
       renderHistory();
       toast("Removed from history");
@@ -3705,6 +4215,18 @@ if (typeof module !== "undefined" && module.exports) {
     yearClauseRange: yearClauseRange,
     matchesYearFilter: matchesYearFilter,
     yearFilterActive: yearFilterActive,
+    parseEpisodeRef: parseEpisodeRef,
+    episodeTitleFrom: episodeTitleFrom,
+    deriveShowName: deriveShowName,
+    episodeLabel: episodeLabel,
+    groupEpisodes: groupEpisodes,
+    episodeHistoryId: episodeHistoryId,
+    historyKey: historyKey,
+    isPlayableFile: isPlayableFile,
+    episodesFromFiles: episodesFromFiles,
+    episodesFromItems: episodesFromItems,
+    rowArrowState: rowArrowState,
+    rowScrollStep: rowScrollStep,
     GENRES: GENRES,
     THEMES: THEMES,
     accentTextFor: accentTextFor,
@@ -3729,6 +4251,7 @@ if (typeof module !== "undefined" && module.exports) {
     ROW_DEFS: ROW_DEFS,
     searchUrl: searchUrl,
     searchArchive: searchArchive,
+    getMetadata: getMetadata,
     buildBrowseQuery: buildBrowseQuery,
     applyAdultExclusion: applyAdultExclusion,
     isAdultItem: isAdultItem,
