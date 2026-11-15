@@ -78,7 +78,7 @@ function applyAdultExclusion(query) {
 var PLAYLIST_BLOCKLIST = ["SciFi_Horror", "Comedy_Films", "silent_films",
   "SciFi_Horror_Movies", "Feature_Films", "classic_tv", "classic_cartoons"];
 
-var SEARCH_FIELDS = ["identifier", "title", "year", "creator", "description",
+var SEARCH_FIELDS = ["identifier", "title", "year", "date", "creator", "description",
   "avg_rating", "downloads", "num_reviews", "subject", "collection"];
 
 var GENRES = {
@@ -229,14 +229,77 @@ function typeOf(doc, fallback) {
   return fallback || "movie";
 }
 
+/* ---------- Release years ---------- */
+
+/* The Archive's own year fields cannot be trusted: uploaders often
+   put the upload date in `year` and `date` alike (verified live:
+   The Two Headed Spy (1958) carries year 2024 and date 2024-03-02;
+   The Fat Man (1951), Our Town (1955) and The Yellow Canary (1943)
+   all carry year 2024). publicdate and addeddate are always upload
+   dates. The title is the most reliable carrier of the release
+   year, then the identifier, then the year field, then the date
+   field. A parenthesised year in the title wins over a bare one:
+   "2001: A Space Odyssey (1968)" is a 1968 film, not 2001. */
+var DERIVED_YEAR_MIN = 1880;
+var DERIVED_YEAR_MAX = 2026;
+
+function inDerivedRange(y) {
+  return y >= DERIVED_YEAR_MIN && y <= DERIVED_YEAR_MAX;
+}
+
+/* A year in free text: a parenthesised or bracketed year first,
+   then the first bare four digit year. Pure, so the node test can
+   drive it. */
+function yearFromText(text) {
+  var t = String(text || "");
+  var m = t.match(/[\(\[]\s*((?:19|20)\d{2})\s*[\)\]]/);
+  if (m && inDerivedRange(Number(m[1]))) return Number(m[1]);
+  var b = t.match(/\b((?:19|20)\d{2})\b/);
+  if (b && inDerivedRange(Number(b[1]))) return Number(b[1]);
+  return null;
+}
+
+/* A year from a metadata field value (a number, a "1958" string, a
+   "1958-01-01" date, or a one element array of any of those).
+   Returns null for garbage, future years and pre-cinema years. */
+function yearFromField(v) {
+  if (v == null) return null;
+  if (Array.isArray(v)) v = v[0];
+  if (v == null) return null;
+  var s = String(v).slice(0, 4);
+  if (!/^\d{4}$/.test(s)) return null;
+  var y = parseInt(s, 10);
+  return inDerivedRange(y) ? y : null;
+}
+
+/* The film's release year, never the upload year. Order: title,
+   identifier, year field, date field. publicdate and addeddate are
+   never consulted. Pure, so the node test can drive it. */
+function deriveYear(doc) {
+  doc = doc || {};
+  var y = yearFromText(doc.title);
+  if (y != null) return y;
+  y = yearFromText(doc.identifier);
+  if (y != null) return y;
+  y = yearFromField(doc.year);
+  if (y != null) return y;
+  return yearFromField(doc.date);
+}
+
+/* A stored history or My List entry may carry a year saved before
+   the release-year fix, when the upload year was stored as the film
+   year. Re-derive from the stored title and identifier so old
+   entries display the right year too. */
+function storedYear(entry) {
+  if (!entry) return null;
+  return deriveYear({ identifier: entry.id, title: entry.title, year: entry.year });
+}
+
 function normalizeDoc(doc, fallbackType) {
-  var year = doc.year;
-  if (Array.isArray(year)) year = year[0];
-  year = parseInt(year, 10);
   return {
     id: String(doc.identifier),
     title: cleanTitle(doc.title),
-    year: isNaN(year) ? null : year,
+    year: deriveYear(doc),
     creator: toArray(doc.creator)[0] ? String(toArray(doc.creator)[0]) : "",
     description: cleanText(doc.description),
     rating: doc.avg_rating != null ? Number(doc.avg_rating) : null,
@@ -1499,6 +1562,30 @@ function wireExpandableDescs(root) {
 /* ---------- Row definitions ---------- */
 
 var MOVIES = "collection:feature_films";
+
+/* Year clauses for Archive queries. The indexed `year` field holds
+   upload years for a share of items (verified live: a 1958 film
+   with year 2024), so a year filter also matches the year in the
+   title, which is where the release year reliably lives. A single
+   year and a range up to 40 years get the title OR; wider ranges
+   stay year-only so the query stays sane. The client-side filter
+   in matchesYearFilter then keeps only items whose derived release
+   year really matches, so a 2024 filter never returns a 1958 film. */
+var TITLE_YEAR_OR_MAX_SPAN = 40;
+
+function yearClauseSingle(y) {
+  return "(year:" + y + " OR title:" + y + ")";
+}
+
+function yearClauseRange(from, to) {
+  from = Number(from); to = Number(to);
+  var base = "year:[" + from + " TO " + to + "]";
+  if (to - from > TITLE_YEAR_OR_MAX_SPAN) return base;
+  var terms = [];
+  for (var y = from; y <= to; y++) terms.push(String(y));
+  return "(" + base + " OR title:(" + terms.join(" OR ") + "))";
+}
+
 var ROW_DEFS = [
   { id: "trending",  title: "Trending Now", q: MOVIES, sort: "downloads desc", skipNoYear: true },
   { id: "toprated",  title: "Top Rated", q: MOVIES, sort: "avg_rating desc", rows: 40, byRating: true, skipNoYear: true },
@@ -1514,8 +1601,8 @@ var ROW_DEFS = [
   { id: "cartoons",  title: "Cartoons", special: "cartoons" },
   { id: "animation", title: "Animation", q: "mediatype:movies AND subject:cartoons", sort: "downloads desc", type: "cartoon", noYoutube: true },
   { id: "new",       title: "Newly Added", q: MOVIES, sort: "addeddate desc" },
-  { id: "golden",    title: "Golden Age 1930s", q: MOVIES + " AND year:[1930 TO 1939]", sort: "downloads desc" },
-  { id: "silent",    title: "Silent Era", q: MOVIES + " AND year:[1890 TO 1929]", sort: "downloads desc" },
+  { id: "golden",    title: "Golden Age 1930s", q: MOVIES + " AND " + yearClauseRange(1930, 1939), sort: "downloads desc", yearRange: [1930, 1939] },
+  { id: "silent",    title: "Silent Era", q: MOVIES + " AND " + yearClauseRange(1890, 1929), sort: "downloads desc", yearRange: [1890, 1929] },
   { id: "directors", title: "Directors Picks", subtitle: "Hitchcock, Chaplin, Keaton and Welles", special: "directors" },
   { id: "imdb",      title: "Top IMDb", special: "imdb" }
 ];
@@ -1529,6 +1616,9 @@ function loadRow(def) {
     .then(function (res) {
       var items = res.items;
       if (def.noYoutube) items = items.filter(function (it) { return !isYoutubeRip(it.id); });
+      if (def.yearRange) items = items.filter(function (it) {
+        return it.year != null && it.year >= def.yearRange[0] && it.year <= def.yearRange[1];
+      });
       if (def.skipNoYear) items = items.filter(function (it) { return it.year != null; });
       if (def.byRating) {
         items = items.filter(function (it) { return it.rating != null; })
@@ -1650,7 +1740,7 @@ function continueWatchingItems(adultOnly) {
     })
     .sort(function (a, b) { return b.lastWatchedAt - a.lastWatchedAt; })
     .map(function (h) {
-      return { id: h.id, title: h.title, year: h.year, type: h.type,
+      return { id: h.id, title: h.title, year: storedYear(h), type: h.type,
         subjects: h.subjects || [], rating: null, downloads: 0 };
     });
 }
@@ -1662,7 +1752,7 @@ function watchAgainItems(adultOnly) {
     })
     .sort(function (a, b) { return b.lastWatchedAt - a.lastWatchedAt; })
     .map(function (h) {
-      return { id: h.id, title: h.title, year: h.year, type: h.type,
+      return { id: h.id, title: h.title, year: storedYear(h), type: h.type,
         subjects: h.subjects || [], rating: null, downloads: 0 };
     });
 }
@@ -1809,10 +1899,39 @@ function isYear(v) {
     Number(v) >= YEAR_MIN && Number(v) <= YEAR_MAX;
 }
 
+/* Does a normalized item's derived release year satisfy the year
+   constraints in a browse-state-like object? A year filter only
+   ever matches on the derived year, so an item whose indexed year
+   is an upload year can never slip through. Items with no
+   derivable year fail an active year filter. Pure, so the node
+   test can drive it. */
+function matchesYearFilter(item, s) {
+  var y = item ? item.year : null;
+  if (s.decade) {
+    var d = String(s.decade).split("-");
+    if (y == null || y < Number(d[0]) || y > Number(d[1])) return false;
+  }
+  if (s.year && isYear(s.year)) {
+    if (y !== Number(s.year)) return false;
+  } else if (s.yearFrom || s.yearTo) {
+    var from = isYear(s.yearFrom) ? Number(s.yearFrom) : YEAR_MIN;
+    var to = isYear(s.yearTo) ? Number(s.yearTo) : YEAR_MAX;
+    if (y == null || y < from || y > to) return false;
+  }
+  return true;
+}
+
+function yearFilterActive(s) {
+  return !!(s.decade || (s.year && isYear(s.year)) || s.yearFrom || s.yearTo);
+}
+
 /* Builds the Archive query from a browse state object, so the node smoke
    test can drive it without a DOM. Year, range and decade are all ANDed
    in; a year outside its decade simply matches nothing, and Browse shows
-   the honest empty state. */
+   the honest empty state. Year clauses also match the year in the
+   title, because the indexed year field holds upload years for a
+   share of items; runBrowse then keeps only items whose derived
+   release year really matches. */
 function buildBrowseQuery(s) {
   var parts = [];
   var t = s.type;
@@ -1828,14 +1947,14 @@ function buildBrowseQuery(s) {
   }
   if (s.decade) {
     var d = s.decade.split("-");
-    parts.push("year:[" + d[0] + " TO " + d[1] + "]");
+    parts.push(yearClauseRange(d[0], d[1]));
   }
   if (s.year && isYear(s.year)) {
-    parts.push("year:" + s.year);
+    parts.push(yearClauseSingle(s.year));
   } else if (s.yearFrom || s.yearTo) {
     var from = isYear(s.yearFrom) ? s.yearFrom : String(YEAR_MIN);
     var to = isYear(s.yearTo) ? s.yearTo : String(YEAR_MAX);
-    parts.push("year:[" + from + " TO " + to + "]");
+    parts.push(yearClauseRange(from, to));
   }
   if (s.query) {
     var terms = s.query.replace(/["()]/g, " ").trim().split(/\s+/).join(" ");
@@ -1908,6 +2027,9 @@ function runBrowse(reset) {
     if (browseState.minRating > 0) {
       items = items.filter(function (it) { return it.rating != null && it.rating >= browseState.minRating; });
     }
+    if (yearFilterActive(browseState)) {
+      items = items.filter(function (it) { return matchesYearFilter(it, browseState); });
+    }
     items = filterVisible(items).filter(function (it) { return reactionOf(it.id) !== -1; });
     items = sortClientSide(items);
     var grid = document.getElementById("browseGrid");
@@ -1963,7 +2085,13 @@ function openDetails(item) {
       });
     });
     var desc = cleanText(toArray(m.description)[0] || item.description);
-    var year = m.date ? String(m.date).slice(0, 4) : (item.year ? String(item.year) : "");
+    /* Never trust the metadata date on its own: it holds the upload
+       date just as often as the release date. Re-derive the release
+       year from the full metadata the same way normalizeDoc does. */
+    var detYear = deriveYear({ identifier: item.id,
+      title: toArray(m.title)[0] || item.title, year: m.year, date: m.date });
+    if (detYear == null) detYear = item.year;
+    var year = detYear != null ? String(detYear) : "";
     var creator = toArray(m.creator)[0] ? String(toArray(m.creator)[0]) : item.creator;
     var h = state.history[item.id];
     var progress = h ? h.progress : 0;
@@ -1971,7 +2099,7 @@ function openDetails(item) {
     var reaction = reactionOf(item.id);
     var badge = ratingBadge(item);
     var fullItem = {
-      id: item.id, title: item.title, year: item.year, type: item.type,
+      id: item.id, title: item.title, year: detYear, type: item.type,
       subjects: subjects.length ? subjects : (item.subjects || []),
       rating: item.rating, downloads: item.downloads
     };
@@ -2256,7 +2384,7 @@ function closePlayer() {
 function myListItems(adultOnly) {
   return state.myList.filter(function (m) { return !!m.adult === !!adultOnly; })
     .map(function (m) {
-      return { id: m.id, title: m.title, year: m.year, type: m.type,
+      return { id: m.id, title: m.title, year: storedYear(m), type: m.type,
         subjects: [], rating: null, downloads: 0 };
     });
 }
@@ -2293,14 +2421,14 @@ function renderHistory() {
     return;
   }
   entries.forEach(function (h) {
-    var item = { id: h.id, title: h.title, year: h.year, type: h.type, subjects: h.subjects || [] };
+    var item = { id: h.id, title: h.title, year: storedYear(h), type: h.type, subjects: h.subjects || [] };
     var div = document.createElement("div");
     div.className = "history-item";
     div.innerHTML =
       '<span class="history-thumb-wrap"><span class="title-card title-card-mini">' + titleCardHtml(item) + "</span>" +
       '<img class="history-thumb" src="' + posterUrl(h.id) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'"></span>' +
       '<div class="history-main"><div class="card-title">' + esc(h.title) + "</div>" +
-      '<div class="card-meta">' + esc([h.year ? String(h.year) : "", typeLabel(h.type),
+      '<div class="card-meta">' + esc([item.year ? String(item.year) : "", typeLabel(h.type),
         formatDate(h.lastWatchedAt), h.watchCount ? "Watched " + h.watchCount + " time" + (h.watchCount === 1 ? "" : "s") : ""]
         .filter(Boolean).join(" · ")) + "</div>" +
       '<div class="progress-track"><div class="progress-fill" style="width:' + Math.round(h.progress * 100) + '%"></div></div>' +
@@ -3569,6 +3697,14 @@ if (typeof module !== "undefined" && module.exports) {
     isYoutubeRip: isYoutubeRip,
     isBlocked: isBlocked,
     normalizeDoc: normalizeDoc,
+    deriveYear: deriveYear,
+    yearFromText: yearFromText,
+    yearFromField: yearFromField,
+    storedYear: storedYear,
+    yearClauseSingle: yearClauseSingle,
+    yearClauseRange: yearClauseRange,
+    matchesYearFilter: matchesYearFilter,
+    yearFilterActive: yearFilterActive,
     GENRES: GENRES,
     THEMES: THEMES,
     accentTextFor: accentTextFor,

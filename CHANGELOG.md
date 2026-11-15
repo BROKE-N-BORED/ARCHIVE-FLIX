@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## v1.4.1 - 2026-11-14
+
+- Years are the film's real release year now, never the Archive
+  upload year. The Archive's own year and date fields cannot be
+  trusted: uploaders often put the upload date in both (verified
+  live: The Two Headed Spy (1958) carried year 2024; The Fat Man
+  (1951), Our Town (1955) and The Yellow Canary (1943) all carried
+  year 2024). The year shown now comes from the title first, then
+  the identifier, then the year field, then the date field, and the
+  upload dates are never used as the film year. A parenthesised
+  year in the title wins over a bare one, so "2001: A Space Odyssey
+  (1968)" shows 1968. Cards, rows, details, the hero, history and
+  My List all show the corrected year, including entries saved
+  before this fix.
+- The year filter, the From/To range and the decade filter all
+  filter on the corrected release year. The query also matches the
+  year in the title, which recovers films whose indexed year is an
+  upload year (a 1958 search finds 223 titles instead of 170), and
+  results are then filtered client-side by the derived year, so
+  filtering by 2024 no longer returns a 1958 film. The Golden Age
+  and Silent Era rows use the same corrected matching.
+- The service worker cache is bumped to v7 so installed copies pick
+  up the new shell.
+
 ## v1.4.0 - 2026-11-14
 
 - A private 18+ section, hidden by default. Nothing about it shows
