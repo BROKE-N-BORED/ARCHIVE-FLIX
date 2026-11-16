@@ -11,6 +11,9 @@
   --muted: #b3b3b3;
   --accent: #f0b429;
   --accent-text: #1c1300;
+  /* --accent-text-safe is the accent used as text. It must pass 4.5:1
+     on card and raised surfaces. Button backgrounds keep --accent. */
+  --accent-text-safe: #f0b429;
   --accent-soft: rgba(240, 180, 41, 0.16);
   --card: #1c1c1c;
   --line: #2e2e2e;
@@ -24,14 +27,17 @@
 }
 
 html[data-theme="midnight"] {
+  /* Measured WCAG ratios: white on #1d4ed8 is 6.70:1; #60a5fa as text
+     is 5.44:1 or better on every Midnight surface (card, bg2, bg3, bg). */
   --bg: #0d1526;
   --bg2: #14203a;
   --bg3: #1d2c4d;
   --text: #eef2ff;
   --muted: #a8b6d8;
-  --accent: #3b82f6;
+  --accent: #1d4ed8;
   --accent-text: #ffffff;
-  --accent-soft: rgba(59, 130, 246, 0.18);
+  --accent-text-safe: #60a5fa;
+  --accent-soft: rgba(29, 78, 216, 0.18);
   --card: #16233f;
   --line: #26365c;
   --danger: #ff8a7a;
@@ -46,6 +52,7 @@ html[data-theme="forest"] {
   --muted: #aec2b0;
   --accent: #22c55e;
   --accent-text: #06210f;
+  --accent-text-safe: #22c55e;
   --accent-soft: rgba(34, 197, 94, 0.16);
   --card: #1a2a1c;
   --line: #2c422e;
@@ -61,6 +68,7 @@ html[data-theme="sunset"] {
   --muted: #d8bd9d;
   --accent: #f59e0b;
   --accent-text: #241300;
+  --accent-text-safe: #f59e0b;
   --accent-soft: rgba(245, 158, 11, 0.16);
   --card: #2b1e15;
   --line: #4a3524;
@@ -76,6 +84,7 @@ html[data-theme="light"] {
   --muted: #555555;
   --accent: #c40812;
   --accent-text: #ffffff;
+  --accent-text-safe: #c40812;
   --accent-soft: rgba(196, 8, 18, 0.1);
   --card: #ffffff;
   --line: #d4d4d4;
@@ -93,6 +102,7 @@ html[data-theme="contrast"] {
   --muted: #e0e0e0;
   --accent: #ffff00;
   --accent-text: #000000;
+  --accent-text-safe: #ffff00;
   --accent-soft: rgba(255, 255, 0, 0.15);
   --card: #111111;
   --line: #ffffff;
@@ -121,11 +131,30 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 
 button { font: inherit; cursor: pointer; }
 input, select { font: inherit; }
-a { color: var(--accent); }
+a { color: var(--accent-text-safe, var(--accent)); }
 
 ::selection { background: var(--accent); color: var(--accent-text); }
 
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent-text-safe, var(--accent)); outline-offset: 2px; }
+
+/* Skip link: visually hidden until focused, then pinned to the top
+   of the viewport above the top bar. */
+a.skip-link {
+  position: fixed;
+  top: -64px;
+  left: 16px;
+  z-index: 100;
+  background: var(--accent);
+  color: var(--accent-text);
+  padding: 10px 18px;
+  min-height: 44px;
+  border-radius: 8px;
+  font-weight: 800;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+a.skip-link:focus,
+a.skip-link:focus-visible { top: 12px; }
 
 ::-webkit-scrollbar { width: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 5px; }
@@ -136,6 +165,7 @@ a { color: var(--accent); }
   position: sticky;
   top: 0;
   z-index: 40;
+  transition: transform 0.25s ease;
   background: linear-gradient(to bottom,
     color-mix(in srgb, var(--bg) 92%, transparent),
     color-mix(in srgb, var(--bg) 78%, transparent));
@@ -143,6 +173,8 @@ a { color: var(--accent); }
   backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--line);
 }
+/* Hide on scroll down (JS toggles the class); revealed on scroll up. */
+.topbar.topbar-hidden { transform: translateY(-100%); }
 .topbar-inner {
   max-width: 1280px;
   margin: 0 auto;
@@ -155,11 +187,12 @@ a { color: var(--accent); }
 .wordmark {
   background: none;
   border: none;
-  color: var(--accent);
+  color: var(--accent-text-safe, var(--accent));
   font-weight: 900;
   font-size: 1.5rem;
   letter-spacing: 0.01em;
-  padding: 4px 0;
+  padding: 10px 0;
+  min-height: 44px;
   line-height: 1;
 }
 .wordmark span { color: var(--text); }
@@ -171,7 +204,7 @@ a { color: var(--accent); }
   color: var(--muted);
   padding: 8px 12px 6px;
   border-radius: 6px 6px 0 0;
-  min-height: 42px;
+  min-height: 44px;
   font-weight: 600;
   transition: color 0.15s, border-color 0.15s;
 }
@@ -189,7 +222,7 @@ a { color: var(--accent); }
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 8px 16px;
-  min-height: 40px;
+  min-height: 44px;
   font-weight: 600;
   transition: border-color 0.15s, background-color 0.15s;
 }
@@ -201,14 +234,14 @@ a { color: var(--accent); }
   color: var(--muted);
   font-size: 0.9rem;
   cursor: pointer;
-  min-height: 40px;
+  min-height: 44px;
 }
 .hidewatched input { width: 18px; height: 18px; accent-color: var(--accent); }
 
 /* Pull to refresh indicator (Home only) */
 .ptr-indicator {
   position: fixed;
-  top: 72px;
+  top: var(--ptr-top, 72px);
   left: 50%;
   transform: translateX(-50%);
   background: var(--bg3);
@@ -226,7 +259,7 @@ a { color: var(--accent); }
   pointer-events: none;
 }
 .ptr-indicator.visible { opacity: 1; visibility: visible; }
-.ptr-indicator.ready { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.ptr-indicator.ready { border-color: var(--accent); color: var(--accent-text-safe, var(--accent)); font-weight: 700; }
 
 /* Views */
 .view { display: none; max-width: 1280px; margin: 0 auto; padding: 0 24px 48px; }
@@ -287,7 +320,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   max-width: 760px;
 }
 .hero-kicker {
-  color: var(--accent);
+  color: var(--accent-text-safe, var(--accent));
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.14em;
@@ -309,6 +342,11 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   line-height: 1.55;
   max-width: 620px;
 }
+/* Kicker, meta and description share the title's text shadow so they
+   read over a bright patch of artwork; the title keeps its own deeper one. */
+.hero-kicker,
+.hero-meta,
+.hero-desc { text-shadow: 0 1px 10px rgba(0, 0, 0, 0.55); }
 .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
 .hero-actions .btn {
   min-height: 48px;
@@ -337,6 +375,57 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   vertical-align: -1px;
 }
 
+/* Hero skeleton: the same geometry as .hero, with the same scrim
+   gradient plus grey title, text and button blocks. JS renders it
+   into the hero on page load and swaps in the real hero when the
+   catalog resolves. */
+.hero-skeleton {
+  margin: 0;
+  border-radius: 0;
+  overflow: hidden;
+  background: var(--bg2);
+  min-height: min(80vh, 640px);
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+}
+.hero-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(to top,
+      var(--bg) 0%,
+      color-mix(in srgb, var(--bg) 62%, transparent) 32%,
+      transparent 62%),
+    linear-gradient(to right,
+      color-mix(in srgb, var(--bg) 55%, transparent) 0%,
+      transparent 55%);
+}
+.hero-skeleton-content {
+  position: relative;
+  z-index: 2;
+  padding: 32px 40px 72px;
+  max-width: 760px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+.hero-skeleton-title,
+.hero-skeleton-text,
+.hero-skeleton-btn {
+  background: var(--bg3);
+  border-radius: 8px;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+.hero-skeleton-title { width: min(420px, 85%); height: 52px; }
+.hero-skeleton-text { width: min(560px, 100%); height: 20px; }
+.hero-skeleton-btn { width: 148px; height: 48px; margin-top: 8px; }
+
 /* Expandable descriptions */
 .hero .desc-wrap { margin: 0 0 18px; }
 .desc-text.clamped {
@@ -354,9 +443,9 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   background: none;
   border: none;
   padding: 4px 0;
-  color: var(--accent);
+  color: var(--accent-text-safe, var(--accent));
   font-weight: 700;
-  min-height: 36px;
+  min-height: 40px;
 }
 .read-more-btn:hover { text-decoration: underline; }
 
@@ -383,7 +472,16 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 .btn-ghost { background: transparent; }
 .btn-danger { background: transparent; border-color: var(--danger-border); color: var(--danger); }
 .btn:disabled { opacity: 0.5; cursor: default; filter: none; transform: none; }
-.btn.small { padding: 6px 12px; min-height: 36px; font-size: 0.9rem; }
+.btn.small { padding: 6px 12px; min-height: 40px; font-size: 0.9rem; }
+
+/* Pressed "Not for me" state: tint plus a solid border, an inset ring
+   and heavier weight, so the state is not carried by color alone. */
+.btn.dislike-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  font-weight: 800;
+}
 
 /* Rows */
 .rows { display: flex; flex-direction: column; gap: 8px; }
@@ -442,6 +540,10 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 }
 .row-viewport.arrows-shown .row-arrow:not([disabled]) { opacity: 1; pointer-events: auto; }
 .row-arrow[disabled] { opacity: 0; pointer-events: none; }
+/* Keyboard users: a focused arrow is fully visible and clickable,
+   and the arrows show while anything inside the row has focus. */
+.row-arrow:focus-visible { opacity: 1; pointer-events: auto; }
+.row-viewport:focus-within .row-arrow:not([disabled]) { opacity: 1; pointer-events: auto; }
 
 /* Cards */
 .card {
@@ -465,6 +567,17 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
     box-shadow: var(--shadow-lg);
   }
 }
+/* Staggered card entrance, first render only: JS adds .enter and sets
+   --enter-delay per card. Keep delay plus the 250ms run inside 500ms,
+   so JS caps the delay at 250ms. Skipped under reduced motion. */
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.card.enter {
+  animation: card-enter 250ms ease-out backwards;
+  animation-delay: var(--enter-delay, 0ms);
+}
 .poster {
   aspect-ratio: 2 / 3;
   background: var(--bg3);
@@ -474,7 +587,14 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   align-items: center;
   justify-content: center;
 }
-.poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; animation: poster-fade 150ms ease-in; }
+/* Poster images fade in over 150ms. The title card behind them holds
+   the slot meanwhile. The reduced-motion block at the end of this
+   file disables the animation. */
+@keyframes poster-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 /* Designed title card: sits behind every thumbnail image and is the
    visible fallback when a thumbnail is blank, credits, or fails to
    load. Theme-aware, Cinema Gold Netflix look. */
@@ -496,7 +616,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
     linear-gradient(to bottom, var(--bg3), var(--bg2));
 }
 .title-card-mark {
-  color: var(--accent);
+  color: var(--accent-text-safe, var(--accent));
   font-size: 0.66rem;
   font-weight: 800;
   letter-spacing: 0.18em;
@@ -606,9 +726,11 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 }
 .filters input[type="search"]:focus,
 .filter-row select:focus,
-.key-row input[type="password"]:focus {
+.key-row input[type="password"]:focus,
+.profile-add-row input[type="text"]:focus,
+.profile-rename-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-text-safe, var(--accent)) 25%, transparent);
   outline: none;
 }
 .filter-row {
@@ -641,6 +763,31 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   text-transform: none;
 }
 .filter-row-end { align-items: center; justify-content: space-between; }
+
+/* "More filters" collapsible: the extra filter rows stay hidden until
+   the section is open, via .open on the container, .open on the
+   section itself, or aria-expanded on the toggle. */
+#more-filters { display: none; }
+#more-filters.open,
+.open #more-filters,
+#more-filters-toggle[aria-expanded="true"] ~ #more-filters { display: block; }
+#more-filters.filter-row.open,
+.open #more-filters.filter-row,
+#more-filters-toggle[aria-expanded="true"] ~ #more-filters.filter-row { display: flex; }
+#more-filters-toggle {
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 18px;
+  min-height: 44px;
+  font-weight: 600;
+  margin-top: 14px;
+  transition: border-color 0.15s, filter 0.15s;
+}
+#more-filters-toggle:hover { border-color: var(--accent); filter: brightness(1.1); }
+#more-filters-toggle::after { content: " ▾"; }
+#more-filters-toggle[aria-expanded="true"]::after { content: " ▴"; }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
 .chip {
   background: var(--bg3);
@@ -648,7 +795,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 8px 16px;
-  min-height: 40px;
+  min-height: 44px;
   font-weight: 600;
   transition: background-color 0.15s, border-color 0.15s;
 }
@@ -658,6 +805,12 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   border-color: var(--accent);
   color: var(--accent-text);
   box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+/* Active chips carry a visible check as well as the background
+   change, so the state is not color-only. */
+.chip.active::before {
+  content: "✓ ";
+  font-weight: 800;
 }
 .browse-count { color: var(--muted); margin: 18px 0 0; font-size: 0.95rem; }
 
@@ -714,7 +867,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   border-radius: 12px;
   padding: 14px 16px;
 }
-.accent-row input[type="color"] { width: 48px; height: 40px; padding: 2px; background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; }
+.accent-row input[type="color"] { width: 48px; height: 44px; padding: 2px; background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; }
 .key-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .key-row input[type="password"] {
   flex: 1 1 220px;
@@ -753,7 +906,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 5px 14px 5px 5px;
-  min-height: 40px;
+  min-height: 44px;
   font-weight: 700;
   transition: border-color 0.15s;
 }
@@ -832,12 +985,13 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   padding: 11px 14px;
   min-height: 46px;
 }
-.profile-add-row input[type="text"]:focus { border-color: var(--accent); outline: none; }
+/* The focus ring for this input lives in the shared focus rule above. */
 
 /* PIN pad */
 .pin-backdrop { z-index: 58; }
 .pin-sheet { max-width: 380px; text-align: center; }
-.pin-sheet h2 { margin: 0 28px 8px 0; font-size: 1.4rem; font-weight: 800; }
+/* Heading clearance is em-based, so the Cancel button still fits at 200% text. */
+.pin-sheet h2 { margin: 0 4.5em 8px 0; font-size: 1.4rem; font-weight: 800; }
 .pin-sheet .sub { margin: 0 auto 20px; }
 .pin-dots { display: flex; gap: 14px; justify-content: center; margin: 0 0 20px; }
 .pin-dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--muted); }
@@ -889,10 +1043,10 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 8px 10px;
-  min-height: 40px;
+  min-height: 44px;
   max-width: 220px;
 }
-.profile-rename-input:focus { border-color: var(--accent); outline: none; }
+/* The focus ring for this input lives in the shared focus rule above. */
 
 /* Sheets */
 .sheet-backdrop {
@@ -918,10 +1072,15 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 .details-sheet { max-width: 860px; }
 .player-sheet { max-width: 980px; }
 .details-body { min-height: 120px; }
+/* Sticky, not absolute, so the Close button stays visible while a
+   long sheet scrolls. It sits in the top-right corner of the sheet
+   and the negative bottom margin keeps it from pushing content down. */
 .sheet-close {
-  position: absolute;
+  position: sticky;
   top: 14px;
-  right: 14px;
+  display: block;
+  width: fit-content;
+  margin: 0 0 -44px auto;
   background: color-mix(in srgb, var(--bg) 60%, transparent);
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
@@ -929,7 +1088,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 8px 16px;
-  min-height: 40px;
+  min-height: 44px;
   font-weight: 700;
   z-index: 2;
 }
@@ -991,7 +1150,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 }
 .episode-num {
   font-weight: 800;
-  color: var(--accent);
+  color: var(--accent-text-safe, var(--accent));
   font-size: 0.9rem;
   min-width: 56px;
   flex-shrink: 0;
@@ -1011,8 +1170,9 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   padding: 3px 8px;
   flex-shrink: 0;
 }
-.episode-play { font-weight: 800; color: var(--accent); flex-shrink: 0; }
-.player-title { margin: 0 70px 14px 0; font-size: 1.4rem; font-weight: 800; }
+.episode-play { font-weight: 800; color: var(--accent-text-safe, var(--accent)); flex-shrink: 0; }
+/* Title clearance is em-based, so the Close button still fits at 200% text. */
+.player-title { margin: 0 4em 14px 0; font-size: 1.4rem; font-weight: 800; }
 .player-frame { aspect-ratio: 16 / 9; background: #000; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-lg); }
 .player-frame iframe { width: 100%; height: 100%; border: 0; }
 .player-video { width: 100%; height: 100%; display: block; background: #000; }
@@ -1043,13 +1203,35 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 }
 
 /* Skeleton + error */
+/* Skeleton cards use the real card shell (same width, border and
+   radius) with a 2:3 poster block and a body block inside, so the
+   loaded cards land at the same height: 378px desktop, 318px phone. */
 .skeleton-row { display: flex; gap: 16px; padding: 16px 4px; }
 .skeleton-card {
   flex: 0 0 192px;
-  height: 300px;
-  background: var(--bg2);
+  height: 378px;
+  background: var(--card);
+  border: 1px solid var(--line);
   border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+.skeleton-card::before {
+  content: "";
+  display: block;
+  flex: none;
+  aspect-ratio: 2 / 3;
+  background: var(--bg3);
+}
+.skeleton-card::after {
+  content: "";
+  display: block;
+  flex: 1;
+  margin: 12px 14px 14px;
+  border-radius: 8px;
+  background: var(--bg3);
 }
 @keyframes skeleton-pulse {
   0%, 100% { opacity: 0.55; }
@@ -1062,6 +1244,15 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   border: 1px solid var(--line);
   border-radius: 12px;
 }
+
+/* Density: Compact shrinks cards and gaps only. Text sizes and hit
+   areas stay identical to Comfortable, which is the default. */
+html[data-density="compact"] .card { flex-basis: 160px; }
+html[data-density="compact"] .skeleton-card { flex-basis: 160px; height: 323px; }
+html[data-density="compact"] .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+html[data-density="compact"] .row-scroll { gap: 12px; padding: 12px 4px 16px; }
+html[data-density="compact"] .row { margin-top: 28px; }
+html[data-density="compact"] .card-body { padding: 10px 12px 12px; }
 
 @media (max-width: 640px) {
   .view { padding: 0 16px 48px; }
@@ -1077,12 +1268,31 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   }
   .mainnav::-webkit-scrollbar { display: none; }
   .navbtn { flex-shrink: 0; }
-  .ptr-indicator { top: 112px; }
+  .ptr-indicator { top: var(--ptr-top, 112px); }
+  /* Phone top bar: hide the "Hide watched" label text but keep the
+     checkbox and its accessible label (the span stays in the
+     accessibility tree; it is only clipped visually). */
+  .topbar .hidewatched span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
   .card { flex-basis: 152px; }
-  .skeleton-card { flex-basis: 152px; height: 264px; }
+  .row-arrow { width: 36px; }
+  .skeleton-card { flex-basis: 152px; height: 318px; }
+  html[data-density="compact"] .card { flex-basis: 136px; }
+  html[data-density="compact"] .skeleton-card { flex-basis: 136px; height: 287px; }
+  html[data-density="compact"] .grid { grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); }
   .grid { grid-template-columns: repeat(auto-fill, minmax(152px, 1fr)); gap: 12px; }
   .hero { min-height: 480px; }
+  .hero-skeleton { min-height: 480px; }
   .hero-content { padding: 20px 20px 44px; }
+  .hero-skeleton-content { padding: 20px 20px 44px; }
+  .hero-skeleton-title { height: 38px; }
   .hero-content h2 { font-size: clamp(1.9rem, 9vw, 2.4rem); }
   .hero-actions .btn { flex: 1 1 0; padding: 12px 14px; }
   #homeView .rows { padding: 0 16px; }
@@ -1103,4 +1313,25 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
     animation: none !important;
     scroll-behavior: auto !important;
   }
+  /* Entrance and poster fade are skipped entirely, not just shortened. */
+  .card.enter,
+  .poster img { animation: none !important; }
+}
+
+/* Forced colors and high contrast: visible borders in system colors
+   on cards, chips and the active nav state, so nothing is carried
+   by background tint or shadow alone. */
+@media (forced-colors: active), (prefers-contrast: more) {
+  .card,
+  .chip,
+  .btn,
+  .filters,
+  .sheet,
+  .history-item,
+  .episode-row { border-color: CanvasText; }
+  .navbtn.active { border-bottom-color: Highlight; color: CanvasText; }
+  .chip.active,
+  .btn-primary { border-color: Highlight; }
+  .row-arrow { border-color: ButtonText; }
+  :focus-visible { outline-color: Highlight; }
 }

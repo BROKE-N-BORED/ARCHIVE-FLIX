@@ -3,7 +3,7 @@
    calls always go to the network, and video files are never cached.
    No build step, no dependencies. */
 
-var SHELL_CACHE = "archiveflix-shell-v8";
+var SHELL_CACHE = "archiveflix-shell-v9";
 var POSTER_CACHE = "archiveflix-posters-v1";
 var SHELL_FILES = [
   "./",
@@ -19,7 +19,14 @@ var POSTER_MAX = 100;
 self.addEventListener("install", function (event) {
   event.waitUntil(
     caches.open(SHELL_CACHE).then(function (cache) {
-      return cache.addAll(SHELL_FILES);
+      /* Cache each shell file on its own so one failed file does not
+         fail the whole install. A failure is logged and the worker
+         still installs and activates with whatever cached. */
+      return Promise.all(SHELL_FILES.map(function (file) {
+        return cache.add(file).catch(function (err) {
+          console.warn("ARCHIVEFLIX: shell file failed to cache:", file, err);
+        });
+      }));
     }).then(function () {
       return self.skipWaiting();
     })
@@ -76,8 +83,13 @@ self.addEventListener("fetch", function (event) {
     return;
   }
 
-  /* Posters: cache first, capped. */
-  if (url.hostname === "archive.org" && url.pathname.indexOf("/services/img/") === 0) {
+  /* Posters: cache first, capped. Archive thumbnails plus resolved
+     posters from TMDB, OMDb (served from the IMDb media host), and
+     Wikimedia Commons file uploads. */
+  if ((url.hostname === "archive.org" && url.pathname.indexOf("/services/img/") === 0) ||
+      url.hostname === "image.tmdb.org" ||
+      url.hostname === "m.media-amazon.com" ||
+      url.hostname === "upload.wikimedia.org") {
     event.respondWith(cacheFirstPoster(event.request));
     return;
   }

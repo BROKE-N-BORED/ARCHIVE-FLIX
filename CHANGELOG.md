@@ -1,5 +1,162 @@
 # CHANGELOG
 
+## v1.6.0 - 2026-11-15
+
+Full review build: 91 of the 95 tasks from the 2026-11-15 review task list
+are in this release (tasks 7 and 78 are artifact-only and stay with the
+Muse app; task 61, the bottom tab bar, and decisions D1-D4 still need
+Joshua's call; task 95, StartupWMClass, is blocked on a live desktop
+check). Tasks 82 and 93 are partial, see the installer notes below.
+466 node tests pass across the three v1.6.0 suites.
+
+Playback and resume (tasks 1-6, 8): a stream dying mid-film no longer
+marks the title finished. The player only finishes when the playhead is
+genuinely within a few seconds of the end; a false end reloads the same
+file, seeks back to the saved place, and resumes in place, with retries
+before falling back to the embed player. Video errors retry the same
+file once, then try the next playable candidate, and only then fall back
+to embed with a toast explaining why. Position is saved before switching
+to embed, and a failed metadata fetch shows an error state with Retry
+instead of a blank frame. Manual percent buttons now set position from
+the fraction and duration, so resume stops showing a stale position.
+Stale episode responses are guarded by a per-open token, and a missing
+episode file shows "This episode file is no longer available" instead of
+silently playing the wrong video. Embed mode gains a 0% button, and
+marking Finished in embed mode runs the same rescan-and-return-Home flow.
+
+Catalog, search, filters, recommendations (tasks 9-19): searches and
+filter changes made while a fetch is in flight are no longer dropped;
+stale responses are discarded and a queued re-run follows. A-Z and year
+sorts now page through the server (titleSorter and year sorts verified
+live) with Load More and no 100 cap. The minimum rating filter adds a
+server-side avg_rating clause. Identical simultaneous queries fetch
+once. More Like This skips generic subjects and matches the item's type
+and collection. The year max derives from the current year (including
+the "2000s and later" decade, now open-ended), and picking a year clears
+the decade. The search cache returns copies, so enrichment no longer
+leaks across rows. The title count is worded honestly and Load More
+auto-advances through empty pages. Title search escapes special
+characters and ANDs its terms. The YouTube-rip filter applies whenever
+cartoon results are included. Because You Watched rows cover shows and
+cartoons too, and in-progress titles seed them with a small weight.
+
+History, My List, profiles, data (tasks 20-31): old history and My List
+entries get their adult flags backfilled from metadata subjects
+(batched, at most once per entry per session), history entries are
+re-flagged when a title is opened, and adult reactions no longer seed
+normal recommendation rows. A corrupt profiles store is preserved under
+a backup key and the app shows a "your saved data looks damaged" state
+with recovery, download, fresh-start, and carry-on options instead of
+silently wiping everything. When storage is full or unavailable, a
+persistent warning offers export, clearing posters, or erase. The PIN
+pad has a growing delay and a 60 second lockout after 5 failed attempts.
+PINs now hash with SHA-256 via the browser crypto API and a per-profile
+salt; old hashes keep verifying and migrate on the next successful
+unlock, so nobody is locked out. Importing a backup asks for
+confirmation naming what will be replaced, with an export-first step.
+Profile switches and hide-watched toggles refresh the 18+ rows and the
+Browse grid. History is capped at the newest 1000 entries and the OMDb
+cache at 200. Playback persistence is debounced (at most every 20
+seconds, plus on pause, hide, and close) instead of re-saving all
+profiles every 5 seconds. Hide-watched uses episode history keys.
+Delete-profile and wipe refresh the 18+ nav state. Settings notes that
+backups contain API keys and PIN hashes.
+
+18+ section (tasks 32-37): removing a profile PIN auto-disables the
+section, and entry requires a PIN whenever the section is enabled,
+closing the imported-backup hole and the confirm-then-remove race. The
+artifact app's identity gate is ported: normal results whose normalized
+title plus year matches a title in the 18+ pool are dropped (one
+session-cached pool query), catching untagged duplicates. Adult
+detection matches whole words and phrases, so "adult education" and
+"adultery" no longer false-positive while "German Sex Comedy" still
+matches. More Like This takes an explicit adult-context flag instead of
+reading a DOM class. A manual override list covers the known mistags
+(You're Never Too Young, Goliathon / Mighty Peking Man) and is easy to
+extend. Adult animation gets its own row in the section.
+
+Posters, thumbnails, years (tasks 38-42): bad OMDb/TMDB keys are
+detected once (401, 429, and OMDb's own error messages), the provider is
+disabled for the session, and Settings shows a warning; failures are
+negative-cached briefly and no longer double-call per card. Failed
+poster lookups cache as "no poster" for one day instead of 30, and nulls
+do not count toward the 400-entry cap. TMDB prefers results whose title
+and year match. A thrown poster lookup is retried instead of being stuck
+as attempted. When the derived year is suspicious (equal to the upload
+year) and a key is saved, the year is cross-checked against OMDb or TMDB
+by title; without a key the residual stands and stays documented.
+
+Episodes (tasks 43-47): resolution strings like 1280x720 no longer parse
+as season and episode numbers. A show with no episode data explains
+itself instead of showing nothing. The sibling search cap is 200 with
+deduplication across both episode blocks. Episode resume keys use
+season, episode, and title (legacy file-based keys migrate lazily on
+read). Cartoon series get episode sections too.
+
+Layout, UI, accessibility (tasks 48-60, 62-74): the Midnight theme now
+passes contrast both ways (white on #1d4ed8 is 6.70:1; accent-as-text
+uses #60a5fa at 6.14:1 or better on every surface). Dialogs move focus
+in on open, trap Tab, and restore focus on close. Focused carousel
+arrows are visible. Toasts last 4 seconds (7 for long messages), queue
+instead of replacing, and "History cleared" has Undo. Skeleton cards
+match real card geometry. The hero shows a skeleton while loading. The
+pull-to-refresh pill positions itself from the measured topbar height,
+and the topbar Hide watched label hides on phone. Phone arrows are 36px
+and show for 1.2 seconds. Touch targets are 44px (40px for small
+buttons). Empty states and the Browse error offer actions. The "Not for
+me" button shows its state. Custom accents get a real WCAG contrast
+guard plus a text-safe variant. A skip link leads the page. Browse shows
+four filters by default with the rest behind More filters. The sheet
+Close button stays visible (sticky). Settings shows the app version
+(v1.6.0) and a How to Use section. A Density setting (Comfortable /
+Compact) is available per profile. Forced-colors mode gets visible
+borders. Hero text has shadows on kicker, meta, and description.
+Headings keep clearance at 200% text. Active chips show a check. Posters
+fade in over 150ms. Cards enter with a capped stagger. The topbar hides
+on scroll down and returns on scroll up. Profile inputs get the 3px
+focus ring.
+
+Performance and error handling (tasks 75-77, 79-81): every network call
+has a timeout (15s search/metadata, 10s posters) through one shared
+helper, with Retry states. Below-the-fold Home rows load on scroll into
+view instead of all 21+ searches firing at once. Directors and Cartoons
+failures reach the Retry state, and Load More failures toast. The search
+and metadata caches are LRU-capped at 100 entries each. Re-scan clears
+the metadata cache too. The hero falls back to the first non-empty row
+when Trending filters to empty.
+
+PWA, offline, installer, desktop (tasks 82-94, 95 blocked): PNG icons
+(180, 192, 512) are generated from the SVGs and ship in the release
+tarball; the web install still uses SVG because the GitHub push path
+carries text only, so the PNGs cannot be pushed to the repo yet. The
+Linux launcher now serves the installed app over a loopback server
+(http://127.0.0.1:18471), which enables the service worker and the update
+flow on desktop; it reuses a running server for our files, refuses to
+run when another service owns the port, and falls back to file:// when
+python3 is missing. The README points Linux users at the Release .tar.gz
+instead of the Code Download ZIP (the tarball preserves the runnable
+bit; the snapshot push cannot carry file modes). install.sh pre-checks
+icon-192, uses xdg-user-dir for the desktop folder, escapes $HOME in sed
+and uses literal grep for verification. The launcher shows a message via
+zenity, kdialog, or notify-send when no browser exists. A new
+uninstall.sh removes the app, both desktop entries, and stops the
+loopback server. The manifest gains categories and Browse/My List
+shortcuts (the app now deep-links from #browse and #mylist); manifest
+screenshots are blocked on the same binary-push limitation as the PNG
+icons. The installer entry checks each candidate folder for install.sh
+before running. Service worker install tolerates individual file
+failures, the poster cache covers TMDB, OMDb, and Wikimedia hosts, and
+registration uses updateViaCache none so update checks always
+revalidate. The shell cache is v9. Task 95 (StartupWMClass) is not
+shipped: no confident value could be established from documentation, and
+it needs a live desktop check.
+
+Not in this release: task 61 (bottom tab bar) and decisions D1 (video
+frame thumbnails), D2 (year filter alignment), D3 (kids profile), D4
+(Top IMDb alignment) all need Joshua's call. Tasks 7 and 78 belong to the
+Muse app copy. Task 95 needs a live desktop check. The V1-V10 phone and
+PC verifications still need his devices.
+
 ## v1.5.0 - 2026-11-14
 
 - Shows now list their seasons and episodes in the details sheet. Two

@@ -16,6 +16,7 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<a class="skip-link" href="#mainContent">Skip to Browse</a>
 <div id="ptrIndicator" class="ptr-indicator" aria-hidden="true"></div>
 <header class="topbar">
   <div class="topbar-inner">
@@ -41,7 +42,7 @@
   </div>
 </header>
 
-<main>
+<main id="mainContent" tabindex="-1">
   <!-- HOME -->
   <section id="homeView" class="view active" aria-label="Home">
     <div id="hero" class="hero" aria-live="polite"></div>
@@ -79,6 +80,19 @@
             <option value="drama">Drama</option>
           </select>
         </label>
+        <label>Sort
+          <select id="filterSort">
+            <option value="trending">Trending</option>
+            <option value="rated">Top rated</option>
+            <option value="newest">Newly added</option>
+            <option value="az">Title A to Z</option>
+            <option value="year-desc">Year, newest first</option>
+            <option value="year-asc">Year, oldest first</option>
+          </select>
+        </label>
+      </div>
+      <button type="button" id="more-filters-toggle" aria-expanded="false" aria-controls="more-filters">More filters</button>
+      <div class="filter-row" id="more-filters">
         <label>Decade
           <select id="filterDecade">
             <option value="">Any decade</option>
@@ -90,7 +104,7 @@
             <option value="1970-1979">1970s</option>
             <option value="1980-1989">1980s</option>
             <option value="1990-1999">1990s</option>
-            <option value="2000-2026">2000s and later</option>
+            <option value="2000-">2000s and later</option>
           </select>
         </label>
         <label>Year
@@ -115,16 +129,6 @@
             <option value="3.5">3.5 stars and up</option>
             <option value="4">4 stars and up</option>
             <option value="4.5">4.5 stars and up</option>
-          </select>
-        </label>
-        <label>Sort
-          <select id="filterSort">
-            <option value="trending">Trending</option>
-            <option value="rated">Top rated</option>
-            <option value="newest">Newly added</option>
-            <option value="az">Title A to Z</option>
-            <option value="year-desc">Year, newest first</option>
-            <option value="year-asc">Year, oldest first</option>
           </select>
         </label>
       </div>
@@ -189,6 +193,13 @@
       <button class="btn btn-ghost" id="accentClear">Use theme color</button>
     </label>
 
+    <h2 class="section-title">Density</h2>
+    <p class="sub">Comfortable is the roomy default. Compact fits more titles on screen for scanning long grids. Text stays the same size either way.</p>
+    <div class="key-row" role="group" aria-label="Density">
+      <button class="btn btn-primary" id="densityComfortable" aria-pressed="true">Comfortable</button>
+      <button class="btn" id="densityCompact" aria-pressed="false">Compact</button>
+    </div>
+
     <h2 class="section-title" id="profilesSection">Profiles</h2>
     <p class="sub">Up to 5 profiles. Each one has its own history, My List, likes and theme. API keys are shared across profiles on this device.</p>
     <div id="profileList" class="profile-list"></div>
@@ -242,12 +253,23 @@
 
     <h2 class="section-title">About this app</h2>
     <p class="sub">ARCHIVEFLIX is a free, open home screen for the public catalog at archive.org. It plays the Archive's own video files right in the app and saves your place automatically as you watch, so you pick up where you left off. Downloads link to the Archive's own files. A few titles have no file this browser can play directly; those play through the Archive's own player instead.</p>
+    <p class="sub" id="aboutVersion"></p>
+
+    <h2 class="section-title">How to use</h2>
+    <ol>
+      <li><strong>Profiles.</strong> Tap your name in the top bar to switch profiles, or add one under Profiles above. Each profile keeps its own history, My List, likes and theme.</li>
+      <li><strong>PINs.</strong> Set a PIN on a profile under Profiles to lock it. You are asked for the PIN each time you open that profile. A PIN is a casual lock for this device, not encryption.</li>
+      <li><strong>My List.</strong> Open any title and tap Add to My List to save it for later. Saved titles show under My List in the top bar.</li>
+      <li><strong>Reactions.</strong> Tap Like on a title you enjoy and the home page suggests more like it. Tap Not for me and that title stops appearing in rows and Browse.</li>
+      <li><strong>OMDb and TMDB keys.</strong> Paste a free OMDb key above to see real IMDb ratings and posters, and a free TMDB key for more posters. Keys stay in this browser only.</li>
+      <li><strong>Install.</strong> On Android, open this page in Chrome, tap the three dot menu, then Add to Home screen. On iPhone, open it in Safari, tap Share, then Add to Home Screen.</li>
+    </ol>
   </section>
 </main>
 
 <!-- DETAILS SHEET -->
 <div id="detailsSheet" class="sheet-backdrop" hidden>
-  <div class="sheet details-sheet" role="dialog" aria-modal="true" aria-label="Title details">
+  <div class="sheet details-sheet" role="dialog" aria-modal="true" aria-label="Title details" aria-labelledby="detailsTitle">
     <button class="sheet-close" id="detailsClose" aria-label="Close details">Close</button>
     <div id="detailsBody" class="details-body"></div>
   </div>
@@ -255,7 +277,7 @@
 
 <!-- PLAYER SHEET -->
 <div id="playerSheet" class="sheet-backdrop" hidden>
-  <div class="sheet player-sheet" role="dialog" aria-modal="true" aria-label="Player">
+  <div class="sheet player-sheet" role="dialog" aria-modal="true" aria-label="Player" aria-labelledby="playerTitle">
     <button class="sheet-close" id="playerClose" aria-label="Close player">Close</button>
     <h2 id="playerTitle" class="player-title"></h2>
     <div id="playerFrame" class="player-frame"></div>
@@ -276,9 +298,9 @@
 
 <!-- PROFILE PICKER -->
 <div id="profilePicker" class="picker-backdrop" hidden>
-  <div class="picker" role="dialog" aria-modal="true" aria-label="Choose a profile">
+  <div class="picker" role="dialog" aria-modal="true" aria-label="Choose a profile" aria-labelledby="pickerTitle">
     <button class="sheet-close" id="pickerClose" aria-label="Back to the app" hidden>Back</button>
-    <h2>Who is watching?</h2>
+    <h2 id="pickerTitle">Who is watching?</h2>
     <p class="sub">Each profile has its own history, My List and theme.</p>
     <div id="profileTiles" class="profile-tiles"></div>
     <div id="profileAddRow" class="profile-add-row" hidden>
@@ -291,7 +313,7 @@
 
 <!-- PIN PAD -->
 <div id="pinSheet" class="sheet-backdrop pin-backdrop" hidden>
-  <div class="sheet pin-sheet" role="dialog" aria-modal="true" aria-label="Enter PIN">
+  <div class="sheet pin-sheet" role="dialog" aria-modal="true" aria-label="Enter PIN" aria-labelledby="pinTitle">
     <button class="sheet-close" id="pinClose" aria-label="Cancel">Cancel</button>
     <h2 id="pinTitle">Enter PIN</h2>
     <p class="sub" id="pinSub"></p>

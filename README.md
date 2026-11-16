@@ -82,7 +82,13 @@ No app store and no terminal needed.
 
 ## Install it on a Linux desktop
 
-1. Download this repo (Code, Download ZIP, then open the zip) or clone it.
+1. Download the latest ARCHIVEFLIX release file (.tar.gz) from the
+   Releases page (https://github.com/BROKE-N-BORED/ARCHIVE-FLIX/releases)
+   and open it. Use the release file, not the Code Download ZIP: the
+   release file keeps the installer runnable, while the ZIP snapshot
+   does not always preserve that, so double-clicking from a ZIP extract
+   may do nothing until you allow the file to run as a program. Cloning
+   the repo works too.
 2. Double-click "Install ARCHIVEFLIX". If double-clicking opens a text
    editor instead, right-click the file, open Properties, Permissions,
    check "Allow this file to run as a program", then double-click it
@@ -94,6 +100,25 @@ No app store and no terminal needed.
 The installer puts the app in `~/.local/share/archiveflix`, the icon in
 the app menu and on the desktop, and checks the icon file is really
 there before it says it worked.
+
+The desktop copy keeps itself up to date. Opening it starts a small
+local web server on your own computer (http://127.0.0.1:18471, only
+reachable from this computer) so the app can cache itself for offline
+use and pick up new releases the same way the web app does. The server
+uses almost no resources, stops when you log out or restart, and the
+uninstaller stops it too. If another program is already using that
+port, the launcher tells you instead of opening. If python3 is not
+installed, the app still opens straight from its files, but that copy
+does not auto-update: grab the new release and reinstall to update.
+
+To remove ARCHIVEFLIX, run `bash uninstall.sh` from the release
+folder. It asks first, then removes the app files, the app menu entry,
+and the desktop icon. Your history, My List, and settings live in your
+browser and are not touched.
+
+PNG app icons (180, 192, and 512 pixels) ship in the release file for
+launchers that need them. The web install still uses the SVG icons for
+now.
 
 ## Where the catalog comes from
 
