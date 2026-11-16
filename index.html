@@ -134,10 +134,6 @@
       </div>
       <div id="subGenreChips" class="chips" aria-label="Sub-genres"></div>
       <div class="filter-row filter-row-end">
-        <label class="hidewatched">
-          <input type="checkbox" id="hideWatchedBrowse">
-          <span>Hide what I have watched</span>
-        </label>
         <button class="btn btn-ghost" id="clearFilters">Clear filters</button>
       </div>
     </div>
@@ -188,10 +184,24 @@
 
     <h2 class="section-title">Theme</h2>
     <div id="themePresets" class="theme-grid"></div>
-    <label class="accent-row">Custom accent color
-      <input type="color" id="accentPicker" value="#f0b429" aria-label="Custom accent color">
+    <div class="accent-row">
+      <span>Custom accent color</span>
+      <div class="accent-swatches" role="group" aria-label="Accent color presets">
+        <button type="button" class="accent-swatch" data-accent="#f0b429" style="background:#f0b429" aria-label="Gold accent"></button>
+        <button type="button" class="accent-swatch" data-accent="#e5484d" style="background:#e5484d" aria-label="Red accent"></button>
+        <button type="button" class="accent-swatch" data-accent="#f76b15" style="background:#f76b15" aria-label="Orange accent"></button>
+        <button type="button" class="accent-swatch" data-accent="#30a46c" style="background:#30a46c" aria-label="Green accent"></button>
+        <button type="button" class="accent-swatch" data-accent="#3e63dd" style="background:#3e63dd" aria-label="Blue accent"></button>
+        <button type="button" class="accent-swatch" data-accent="#8e4ec6" style="background:#8e4ec6" aria-label="Purple accent"></button>
+        <button type="button" class="accent-swatch" data-accent="#d6409f" style="background:#d6409f" aria-label="Pink accent"></button>
+        <button type="button" class="accent-swatch" data-accent="#12a594" style="background:#12a594" aria-label="Teal accent"></button>
+      </div>
+      <label class="accent-hex-label">Or type a hex color
+        <input type="text" id="accentHex" placeholder="#f0b429" maxlength="7" autocomplete="off" aria-label="Custom accent color as a hex value">
+      </label>
+      <button class="btn btn-ghost" id="accentApply">Apply color</button>
       <button class="btn btn-ghost" id="accentClear">Use theme color</button>
-    </label>
+    </div>
 
     <h2 class="section-title">Density</h2>
     <p class="sub">Comfortable is the roomy default. Compact fits more titles on screen for scanning long grids. Text stays the same size either way.</p>
@@ -239,7 +249,8 @@
     <div class="key-row">
       <button class="btn btn-primary" id="installBtn" hidden>Install ARCHIVEFLIX</button>
     </div>
-    <p class="sub">On an Android phone: open this page in Chrome, tap the three dot menu, then Add to Home screen. On an iPhone: open this page in Safari, tap Share, then Add to Home Screen. The Install button above appears when your browser offers it.</p>
+    <p class="sub">On an Android phone: open this page in Chrome, tap the three dot menu, then Add to Home screen. On an iPhone: open this page in Safari, tap Share, then Add to Home Screen.</p>
+    <p class="sub" id="installHelpNote" hidden>The Install button above appears when your browser offers it.</p>
 
     <h2 class="section-title">Your data</h2>
     <p class="sub">History, My List, likes and settings live in this browser only. Export a backup to move them to another browser or device. A backup includes all profiles.</p>
@@ -257,7 +268,7 @@
 
     <h2 class="section-title">How to use</h2>
     <ol>
-      <li><strong>Profiles.</strong> Tap your name in the top bar to switch profiles, or add one under Profiles above. Each profile keeps its own history, My List, likes and theme.</li>
+      <li><strong>Profiles.</strong> Tap your avatar in the top bar to switch profiles, or add one under Profiles above. Each profile keeps its own history, My List, likes and theme.</li>
       <li><strong>PINs.</strong> Set a PIN on a profile under Profiles to lock it. You are asked for the PIN each time you open that profile. A PIN is a casual lock for this device, not encryption.</li>
       <li><strong>My List.</strong> Open any title and tap Add to My List to save it for later. Saved titles show under My List in the top bar.</li>
       <li><strong>Reactions.</strong> Tap Like on a title you enjoy and the home page suggests more like it. Tap Not for me and that title stops appearing in rows and Browse.</li>
@@ -299,8 +310,8 @@
 <!-- PROFILE PICKER -->
 <div id="profilePicker" class="picker-backdrop" hidden>
   <div class="picker" role="dialog" aria-modal="true" aria-label="Choose a profile" aria-labelledby="pickerTitle">
-    <button class="sheet-close" id="pickerClose" aria-label="Back to the app" hidden>Back</button>
     <h2 id="pickerTitle">Who is watching?</h2>
+    <button class="sheet-close" id="pickerClose" aria-label="Back to the app" hidden>Back</button>
     <p class="sub">Each profile has its own history, My List and theme.</p>
     <div id="profileTiles" class="profile-tiles"></div>
     <div id="profileAddRow" class="profile-add-row" hidden>

@@ -21,14 +21,14 @@ var API = "https://archive.org/advancedsearch.php";
 var META_API = "https://archive.org/metadata/";
 /* The release version, shown in Settings About. Bump with each
    release alongside the service worker cache version. */
-var APP_VERSION = "1.6.0";
+var APP_VERSION = "1.6.1";
 var STORE_KEY = "archiveflix.v1";
 var PROFILES_KEY = "archiveflix.profiles.v1";
 var MAX_PROFILES = 5;
 var PROFILE_COLORS = ["#f0b429", "#3b82f6", "#22c55e", "#a855f7", "#ef4444"];
 /* Fields that belong to one profile. API keys and the OMDb ratings
    cache stay device level, shared across profiles. */
-var PROFILE_FIELDS = ["history", "myList", "reactions", "hideWatched", "theme", "customAccent", "adultEnabled", "density"];
+var PROFILE_FIELDS = ["history", "myList", "reactions", "ratings", "hideWatched", "theme", "customAccent", "adultEnabled", "density"];
 var DEVICE_FIELDS = ["omdbKey", "omdbCache", "tmdbKey"];
 var ROW_SIZE = 24;
 /* History keeps the newest 1000 entries, pruning the oldest
@@ -41,7 +41,7 @@ var HISTORY_MAX_ENTRIES = 1000;
 var OMDB_CACHE_MAX = 200;
 
 /* Adult 18+ section. The Archive's own subject tags decide what is
-   adult. These eight subjects, inside feature_films, are the whole
+   adult. These ten subjects, inside feature_films, are the whole
    18+ catalog: 107 titles, verified live 2026-11-14. One shared
    definition drives both sides: ADULT_QUERY is what the 18+ section
    includes, and ADULT_EXCLUDE (NOT the same query) is what every
@@ -49,10 +49,12 @@ var OMDB_CACHE_MAX = 200;
    section and still show up in normal search. "sex comedy" is in
    the set because a second, untagged upload of Madame and Her
    Niece (1969) carried only Sex Comedy tags and would otherwise
-   have surfaced in the normal catalog. */
+   have surfaced in the normal catalog. "sex" and "nudist" joined
+   2026-11-16: Real Sex (HBO) carries the bare subject "sex" in its
+   metadata, and nudist films are nudie films by another name. */
 var ADULT_SUBJECTS = ["adult", "erotica", "erotic", "sexploitation",
-  "softcore", "nudie", "adults only", "sex comedy"];
-var ADULT_QUERY = 'subject:(adult OR erotica OR erotic OR sexploitation OR softcore OR nudie OR "adults only" OR "sex comedy")';
+  "softcore", "nudie", "nudist", "sex", "adults only", "sex comedy"];
+var ADULT_QUERY = 'subject:(adult OR erotica OR erotic OR sexploitation OR softcore OR nudie OR nudist OR sex OR "adults only" OR "sex comedy")';
 var ADULT_EXCLUDE = "NOT " + ADULT_QUERY;
 
 /* Manual override: titles the Archive's own tags put in the 18+
@@ -74,6 +76,59 @@ var ADULT_OVERRIDE_IDS = [
   "goliathon-mighty-peking-man-xing-xing-wang-1977"
 ];
 
+/* Manual blocklist: adult titles the Archive's own tags do NOT
+   flag, so neither the server exclusion, the subject filter nor
+   the identity gate can catch them (the gate only knows titles
+   that have a tagged twin in the 18+ pool, and these have none).
+   Found by the 2026-11-16 QA pass leaking into normal browsing;
+   every identifier below was verified live against the Archive
+   metadata API that day, with subjects that carry no adult tag:
+   - in-the-realm-of-the-senses: subjects Nagisa Oshima, drama,
+     romance, English-subtitles. The drama tag is why it seeded
+     "Because you watched Drama" and More Like This.
+   - DiaryofaNudist, DiaryOfANudistwidescreen: subjects Romance,
+     and "Diary of a Nudist" / Doris Wishman.
+   - hborealsex: "Real Sex (HBO Series: 1990-2009)", in
+     classic_tv, so the movies-only identity pool could never
+     hold it either. Subjects "real sex", hbo, documentary.
+   - ChildBride, child-bride-1938: subject Drama only.
+   The title list is the backstop for further uploads of the same
+   films under new identifiers: any item whose cleaned title is
+   one of these, or starts with one followed by more words, is
+   adult whatever its tags say. */
+var ADULT_BLOCK_IDS = [
+  "in-the-realm-of-the-senses",
+  "DiaryofaNudist",
+  "DiaryOfANudistwidescreen",
+  "hborealsex",
+  "ChildBride",
+  "child-bride-1938"
+];
+var ADULT_BLOCK_TITLES = [
+  "in the realm of the senses",
+  "diary of a nudist",
+  "real sex",
+  "child bride"
+];
+
+/* True when an item is on the manual adult blocklist, by
+   identifier or by title. The title match uses the same
+   parenthetical-stripped key as dedupe, so "Diary Of A Nudist
+   (widescreen)" and "Real Sex (HBO Series: 1990-2009) -
+   Complete Docuseries" both match. Pure, so the node test can
+   drive it. */
+function isAdultBlocked(item) {
+  if (!item) return false;
+  if (item.id && ADULT_BLOCK_IDS.indexOf(String(item.id)) !== -1) return true;
+  var t = titleMatchKey(item.title);
+  if (!t) return false;
+  for (var i = 0; i < ADULT_BLOCK_TITLES.length; i++) {
+    var b = ADULT_BLOCK_TITLES[i];
+    if (t === b || t.indexOf(b + " ") === 0) return true;
+  }
+  return false;
+}
+
 function isAdultOverridden(id) {
   return !!id && ADULT_OVERRIDE_IDS.indexOf(String(id)) !== -1;
 }
@@ -81,9 +136,10 @@ function isAdultOverridden(id) {
 /* Subjects that contain the word "adult" without being adult
    content: adult education is a class, not a film genre. These
    phrases are stripped before matching, so they never classify a
-   title as adult. */
+   title as adult. "sex education" is here for the same reason
+   now that bare "sex" is an adult subject. */
 var ADULT_EXCEPTION_PHRASES = ["adult education", "adult learning",
-  "adult literacy", "adult swim"];
+  "adult literacy", "adult swim", "sex education"];
 
 function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -124,6 +180,7 @@ function adultSubjectMatches(s) {
 function isAdultItem(item) {
   if (!item) return false;
   if (isAdultOverridden(item.id)) return false;
+  if (isAdultBlocked(item)) return true;
   if (item.adult) return true;
   var subs = item.subjects || [];
   for (var i = 0; i < subs.length; i++) {
@@ -153,16 +210,40 @@ function normalizeTitleForMatch(title) {
     .replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+/* A title reduced to its matchable shape with parenthetical and
+   bracketed junk stripped first: "Diary Of A Nudist (widescreen)"
+   and "Diary of a Nudist" share the key "diary of a nudist".
+   Shared by the adult title blocklist and dedupe, so both compare
+   titles the same way. Pure, so the node test can drive it. */
+function titleMatchKey(title) {
+  var t = String(title || "")
+    .replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s*\[[^\]]*\]\s*/g, " ");
+  /* Trailing uploader tags ("- restored", "1959 colorized") are
+     not part of the identity either, or "The Screaming Skull
+     1959 colorized" would never dedupe against "The Screaming
+     Skull". */
+  t = t.replace(/\s+[-–—]?\s*\b(?:restored|remastered|colori[sz]ed|colourised|widescreen|fullscreen|hq|hd|720p|1080p|2160p|4k|unrated)\b.*$/i, " ");
+  t = t.replace(/\s+\b(?:19|20)\d{2}\b\s*$/, " ");
+  t = normalizeTitleForMatch(t);
+  /* A leading article is not part of the identity: "The House on
+     Haunted Hill" and "House on Haunted Hill" are one film. */
+  return t.replace(/^(the|a|an)\s+/, "");
+}
+
 /* ---------- 18+ identity gate ---------- */
 /* An untagged second upload of an adult title carries no adult
    tags, so neither the server exclusion nor the client side subject
    filter can catch it. The gate catches it by identity instead: a
    normal result whose normalized title plus year matches a title
    in the 18+ pool is dropped. The pool is one extra query per
-   session (title, year and identifier fields only, 500 rows covers
-   the 107 title pool), cached for the session. Override list titles
-   are left out of the pool, since they are not adult. */
-var ADULT_POOL_ROWS = 500;
+   session (title, year and identifier fields only, 800 rows covers
+   the pool across all three catalog collections), cached for the
+   session. Override list titles are left out of the pool, since
+   they are not adult. The pool covers every catalog collection,
+   not movies only: a TV adult title like Real Sex (HBO) leaked
+   in 2026-11-16 precisely because the old movies-only pool could
+   never hold it. */
+var ADULT_POOL_ROWS = 800;
 var ADULT_POOL_GATE_WAIT_MS = 2000;
 var adultPoolSet = null;
 var adultPoolPromise = null;
@@ -183,7 +264,9 @@ function isInAdultPool(title, year) {
 function fetchAdultPool() {
   if (adultPoolPromise) return adultPoolPromise;
   var p = new URLSearchParams();
-  p.set("q", MOVIES + " AND " + ADULT_QUERY);
+  p.set("q", "(collection:feature_films OR collection:classic_tv OR " +
+    "collection:classic_cartoons) AND " + ADULT_QUERY +
+    " AND NOT mediatype:collection");
   ["identifier", "title", "year"].forEach(function (f) { p.append("fl[]", f); });
   p.set("rows", String(ADULT_POOL_ROWS));
   p.set("output", "json");
@@ -244,7 +327,7 @@ var PLAYLIST_BLOCKLIST = ["SciFi_Horror", "Comedy_Films", "silent_films",
   "SciFi_Horror_Movies", "Feature_Films", "classic_tv", "classic_cartoons"];
 
 var SEARCH_FIELDS = ["identifier", "title", "year", "date", "creator", "description",
-  "avg_rating", "downloads", "num_reviews", "subject", "collection"];
+  "avg_rating", "downloads", "num_reviews", "subject", "collection", "mediatype"];
 
 var GENRES = {
   horror:   { label: "Horror",    subject: "horror",
@@ -287,13 +370,80 @@ function toArray(v) {
   return Array.isArray(v) ? v : [v];
 }
 
+/* Words that mark a parenthetical, or a trailing tail, as uploader
+   junk rather than part of the title: "imdb score: 8.3", "noir",
+   "restored", "colorized", "HQ". A parenthetical that carries none
+   of these and no year, like "(Part 2)", is kept. */
+var TITLE_JUNK_WORDS = "restored|remastered|colori[sz]ed|colourised|" +
+  "imdb|score|noir|widescreen|fullscreen|hq|hd|720p|1080p|2160p|4k|" +
+  "tv rip|public domain|dvd|blu-?ray|xvid|subtitles|subbed|unrated|" +
+  "directors cut|extended";
+
+/* A display title, cleaned of raw archive.org filename junk:
+   decorative Unicode is folded to plain text (fraktur and
+   fullwidth via NFKC, skulls and emoji stripped), junk
+   parentheticals are dropped, and duplicate years collapse to
+   one trailing year in parentheses. "Double Indemnity (restored)
+   (1944, noir, imdb score: 8.3) (1944)" becomes "Double
+   Indemnity (1944)"; "I Bury The Living (1958) (1958)" becomes
+   "I Bury The Living (1958)". The year is found before stripping,
+   so it survives even when every year parenthetical is junk. A
+   leading or trailing bare year equal to that year is dropped and
+   re-added once; a different leading year, like the 2001 in
+   "2001: A Space Odyssey (1968)", is part of the title and stays.
+   Pure, so the node test can drive it. */
 function cleanTitle(t) {
-  t = String(t == null ? "" : t).replace(/\s+/g, " ").trim();
+  t = String(t == null ? "" : t);
+  try { t = t.normalize("NFKC"); } catch (e) { /* old engine: skip folding */ }
+  t = t.replace(/[\u{2600}-\u{27BF}\u{1F000}-\u{1FAFF}\u{2000}-\u{206F}]/gu, " ");
+  t = t.replace(/\s+/g, " ").trim();
+  var year = yearFromText(t);
+  var junkRe = new RegExp("\\b(?:" + TITLE_JUNK_WORDS + ")\\b", "i");
+  t = t.replace(/\s*[\(\[][^()\[\]]*[\)\]]/g, function (group) {
+    var inner = group.replace(/^[\s\(\[]+|[\s\)\]]+$/g, "");
+    if (/^(?:19|20)\d{2}$/.test(inner)) return " ";
+    if (/\b(?:19|20)\d{2}\b/.test(inner)) return " ";
+    if (junkRe.test(inner)) return " ";
+    return group;
+  });
+  t = t.replace(/\s+/g, " ").trim();
+  /* A trailing junk tail goes, but only when it is unambiguous:
+     "colorized", "HD", "widescreen" and the like are never the
+     title itself, while "Score" or "Noir" can be ("The Score"),
+     so those only go after a dash or colon separator. */
+  var tailTags = "restored|remastered|colori[sz]ed|colourised|" +
+    "widescreen|fullscreen|hq|hd|720p|1080p|2160p|4k|tv rip|" +
+    "public domain|dvd|blu-?ray|xvid|subtitles|subbed";
+  t = t.replace(new RegExp("\\s+\\b(?:" + tailTags + ")\\b.*$", "i"), "");
+  t = t.replace(new RegExp("\\s*[-\\u2013\\u2014:]\\s*\\b(?:" + TITLE_JUNK_WORDS + ")\\b.*$", "i"), "");
+  t = t.replace(/\s+/g, " ").trim();
+  if (year != null) {
+    var noLead = t.replace(new RegExp("^" + year + "\\s*[-\\u2013\\u2014:]?\\s+"), "");
+    if (noLead) t = noLead;
+    var noTrail = t.replace(new RegExp("\\s+\\b" + year + "\\b\\s*$"), "");
+    if (noTrail) t = noTrail;
+    t = t.replace(/\s+/g, " ").trim().replace(/[-:\u2013\u2014\s]+$/, "").trim();
+    if (t) t = t + " (" + year + ")";
+  }
   return t || "Untitled";
+}
+
+/* A title with its year for display: cleanTitle already ends the
+   title with "(year)" when one is known, so appending it again
+   would read "(1915) (1915)". Only append when it is missing. */
+function titleWithYear(title, year) {
+  var t = String(title == null ? "" : title);
+  if (year && t.slice(-6) !== "(" + year + ")") t += " (" + year + ")";
+  return t;
 }
 
 function cleanText(t, max) {
   t = String(t == null ? "" : t).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  /* Descriptions sometimes start with a bare URL the uploader
+     pasted in ("http://imdb.com/title/tt0046969/ A man wrongly
+     imprisoned..."). Strip leading URLs so no surface ever opens
+     with one. Only leading URLs go: a URL mid-text is content. */
+  t = t.replace(/^(https?:\/\/\S+\s*)+/i, "").replace(/^(www\.\S+\s*)+/i, "").trim();
   if (max && t.length > max) t = t.slice(0, max - 1).trim() + "...";
   return t;
 }
@@ -390,12 +540,31 @@ function subjectsOf(doc) {
   return out;
 }
 
+/* The catalog type of a search doc. Collection first, then title
+   and subject signals, then the caller's fallback. A "Season 1"
+   or S01E02 title is a show whatever collection it sits in ("The
+   Addams Family (Season 1)" sits in feature_films and used to be
+   labeled Movie), and TV subject tags say show too. A cartoon
+   subject on a compilation or hosted show does not make it a
+   cartoon: "Shocker Internet Drive In - Week 2" carries a
+   cartoons tag and used to be labeled Cartoon in Sci-Fi, so a
+   cartoon subject loses to episode markers (a show) and to
+   drive-in / compilation markers (the fallback, a movie). */
 function typeOf(doc, fallback) {
   var cols = toArray(doc.collection).map(function (c) { return String(c).toLowerCase(); });
   if (cols.indexOf("classic_tv") !== -1) return "show";
-  if (cols.indexOf("classic_cartoons") !== -1) return "cartoon";
+  var title = String(doc.title || "");
   var subs = subjectsOf(doc).map(function (s) { return s.toLowerCase(); });
-  if (subs.indexOf("cartoons") !== -1 || subs.indexOf("cartoon") !== -1) return "cartoon";
+  if (/season\s*\d/i.test(title) || /\bS\d{1,2}\s*E\d/i.test(title)) return "show";
+  if (subs.indexOf("tv") !== -1 || subs.indexOf("television") !== -1 ||
+      subs.indexOf("tv series") !== -1 || subs.indexOf("tv show") !== -1 ||
+      subs.indexOf("classic tv") !== -1 || subs.indexOf("classic television") !== -1) return "show";
+  if (cols.indexOf("classic_cartoons") !== -1) return "cartoon";
+  if (subs.indexOf("cartoons") !== -1 || subs.indexOf("cartoon") !== -1) {
+    if (/season\s*\d|episode|ep\.?\s*\d|week\s*\d/i.test(title)) return "show";
+    if (/drive[\s-]?in|compilation/i.test(title)) return fallback || "movie";
+    return "cartoon";
+  }
   return fallback || "movie";
 }
 
@@ -487,18 +656,96 @@ function storedYear(entry) {
 }
 
 function normalizeDoc(doc, fallbackType) {
+  /* An avg_rating of 0 means no rating, not a zero-star film: the
+     Archive stores 0 for unrated uploads, and cards showed a
+     misleading "ARCHIVE 0.0". Null flows into the "No rating"
+     badge instead. */
+  var rating = doc.avg_rating != null ? Number(doc.avg_rating) : null;
+  if (rating != null && !(rating > 0)) rating = null;
   return {
     id: String(doc.identifier),
     title: cleanTitle(doc.title),
     year: deriveYear(doc),
     creator: toArray(doc.creator)[0] ? String(toArray(doc.creator)[0]) : "",
     description: cleanText(doc.description),
-    rating: doc.avg_rating != null ? Number(doc.avg_rating) : null,
+    rating: rating,
     downloads: doc.downloads != null ? Number(doc.downloads) : 0,
     numReviews: doc.num_reviews != null ? Number(doc.num_reviews) : 0,
     subjects: subjectsOf(doc),
     type: typeOf(doc, fallbackType)
   };
+}
+
+/* ---------- Dedupe ---------- */
+/* The Archive holds several uploads of the same film, each with
+   its own rating ("The Screaming Skull" four times in the 1958
+   results; House on Haunted Hill at 4.3 and 4.7). One film is
+   one card: the dedupe key is the matchable title plus the
+   derived release year, so a remake in another year stays
+   separate. The best upload wins: most downloads, then best
+   rating. Pure, so the node test can drive it. */
+function dedupeKey(item) {
+  if (!item) return null;
+  var t = titleMatchKey(item.title);
+  if (!t) return null;
+  return t + "|" + (item.year != null ? item.year : "?");
+}
+
+function dedupeItems(items) {
+  var best = {};
+  var firstAt = {};
+  var order = [];
+  (items || []).forEach(function (it, i) {
+    var k = dedupeKey(it) || ("__single__" + i);
+    if (!Object.prototype.hasOwnProperty.call(best, k)) {
+      best[k] = it;
+      firstAt[k] = i;
+      order.push(k);
+      return;
+    }
+    var cur = best[k];
+    if ((it.downloads || 0) > (cur.downloads || 0) ||
+        ((it.downloads || 0) === (cur.downloads || 0) &&
+         (it.rating || 0) > (cur.rating || 0))) {
+      best[k] = it;
+    }
+  });
+  order.sort(function (a, b) { return firstAt[a] - firstAt[b]; });
+  return order.map(function (k) { return best[k]; });
+}
+
+/* ---------- Review-weighted ratings ---------- */
+/* Sorting Top Rated by raw avg_rating shows forty cards at
+   exactly 5.0: the Archive's top of that sort is single-review
+   5.0s (verified live 2026-11-16: all 40 top rows were 5.0 with
+   1-3 reviews each). A Bayesian score with a 3.5 prior over 5
+   phantom reviews ranks a 4.8 from 46 reviews above a 5.0 from
+   one, so the row shows real, varied ratings. Pure, so the node
+   test can drive it. */
+var TOP_RATED_PRIOR_MEAN = 3.5;
+var TOP_RATED_PRIOR_COUNT = 5;
+
+function topRatedScore(it) {
+  var n = (it && it.numReviews) || 0;
+  var r = (it && it.rating) || 0;
+  return (r * n + TOP_RATED_PRIOR_MEAN * TOP_RATED_PRIOR_COUNT) / (n + TOP_RATED_PRIOR_COUNT);
+}
+
+function topRatedSort(a, b) {
+  return (topRatedScore(b) - topRatedScore(a)) || ((b.downloads || 0) - (a.downloads || 0));
+}
+
+/* Compare two items by derived release year, for the Browse year
+   sorts. Unknown years sort last in both directions; ties break
+   by downloads. Pure, so the node test can drive it. */
+function compareDerivedYear(a, b, descending) {
+  var ya = a ? a.year : null;
+  var yb = b ? b.year : null;
+  if (ya == null && yb == null) return (b.downloads || 0) - (a.downloads || 0);
+  if (ya == null) return 1;
+  if (yb == null) return -1;
+  if (ya !== yb) return descending ? yb - ya : ya - yb;
+  return (b.downloads || 0) - (a.downloads || 0);
 }
 
 /* Pick a sensible download file from a metadata files list.
@@ -641,6 +888,11 @@ function episodeTitleFrom(text, showName) {
   t = t.replace(/["\u201c\u201d]/g, "");
   t = t.replace(/S\d{1,2}\s*[- ]?\s*E(?:p(?:isode)?\.?)?\s*\d{1,3}/ig, " ");
   t = t.replace(/Season\s*\d{1,2}\b[^0-9]{0,25}?Episode\s*\d{1,3}/ig, " ");
+  /* A season marker on its own ("S01", "Season 1") is not an
+     episode title either: without this it survives into the row
+     next to the S1 E7 label, reading "S01 S1 E7". */
+  t = t.replace(/\bS\d{1,2}\b/ig, " ");
+  t = t.replace(/\bSeason\s*\d{1,2}\b/ig, " ");
   t = t.replace(/\bEp\.?\s*\d{1,2}x\d{1,3}\b/ig, " ");
   /* Same non-digit boundary as parseEpisodeRef, so a resolution
      like 1280x720 in a title is not mangled into "12". */
@@ -651,22 +903,53 @@ function episodeTitleFrom(text, showName) {
   t = t.replace(/[\(\[]\s*(?:19|20)\d{2}\s*[\)\]]/g, " ");
   t = t.replace(/-\s*0*\d{1,3}\s*-/g, " ");
   t = t.replace(/\(TV Rip\)/ig, " ");
-  if (showName) {
-    /* The same show is spelled with and without "The" across
-       uploads ("The Beverly Hillbillies" vs "Beverly Hillbillies
-       Ep01 ..."), so strip both spellings. */
-    var names = [showName];
-    if (/^the\s+/i.test(showName)) names.push(showName.replace(/^the\s+/i, ""));
-    else names.push("The " + showName);
-    names.forEach(function (n) {
-      var rx = new RegExp("^" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
-        "\\s*[-:\u2013\u2014]?\\s*", "i");
-      t = t.replace(rx, "");
-    });
-  }
+  t = stripShowName(t, showName);
   t = t.replace(/\s+/g, " ").trim()
     .replace(/^[-:\u2013\u2014\s]+/, "").replace(/[-:\u2013\u2014\s]+$/, "").trim();
   return t;
+}
+
+/* Strip a leading show name from an episode title, with or without
+   "The", plus an optional year after the name, so "The Twilight
+   Zone 1959 The Lonely" becomes "The Lonely" instead of keeping
+   the show name and year in front of every episode. A bare year
+   left at the front after the strip goes too. Used by
+   episodeTitleFrom at build time and by the episode row at render
+   time, for rows whose title was built when no show name was
+   known. */
+function stripShowName(t, showName) {
+  if (!showName) return t;
+  /* The same show is spelled with and without "The" across
+     uploads ("The Beverly Hillbillies" vs "Beverly Hillbillies
+     Ep01 ..."), so strip both spellings. */
+  var names = [showName];
+  if (/^the\s+/i.test(showName)) names.push(showName.replace(/^the\s+/i, ""));
+  else names.push("The " + showName);
+  var stripped = false;
+  names.forEach(function (n) {
+    var rx = new RegExp("^" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
+      "(?:\\s+(?:19|20)\\d{2})?\\s*[-:\u2013\u2014]?\\s*", "i");
+    var next = t.replace(rx, "");
+    if (next !== t) { stripped = true; t = next; }
+  });
+  if (stripped) t = t.replace(/^(?:19|20)\d{2}\b\s*[-:\u2013\u2014]?\s*/, "");
+  return t;
+}
+
+/* A show name for display: a trailing season marker ("S01",
+   "Season 1") or a trailing year ("1959") is upload metadata,
+   not the name, and repeating it in front of every episode title
+   is what made rows read "The Twilight Zone 1959 S01 S1 E7". The
+   original is kept when stripping would leave nothing. */
+function displayShowName(name) {
+  var t = String(name || "").trim();
+  for (var i = 0; i < 3; i++) {
+    t = t.replace(/\s*\bS\d{1,2}\s*$/i, "")
+         .replace(/\s*\bSeason\s*\d{1,2}\s*$/i, "")
+         .replace(/\s+(?:19|20)\d{2}\s*$/, "")
+         .replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, "").trim();
+  }
+  return t || String(name || "").trim();
 }
 
 /* Subject tags that name a medium, not a show. */
@@ -702,13 +985,19 @@ function deriveShowName(item, subjects) {
     if (first.length >= 2 && first.length <= 40) return first;
   }
   var lower = t.toLowerCase();
+  /* The title may carry a leading "The" the subject lacks
+     ("The Twilight Zone 1959 S01" vs subject "Twilight Zone
+     1959"), so try the match with "The" stripped too. Without
+     this the show name comes back null and episode titles keep
+     the whole show name in front of every episode. */
+  var lowerNoThe = lower.replace(/^the\s+/, "");
   var found = null;
   (subjects || []).forEach(function (s) {
     if (found) return;
     var sub = String(s || "").trim();
     if (!sub || sub.length < 3 || sub.length > 40) return;
     if (GENERIC_SHOW_SUBJECTS.indexOf(sub.toLowerCase()) !== -1) return;
-    if (lower.indexOf(sub.toLowerCase()) === 0) found = sub;
+    if (lower.indexOf(sub.toLowerCase()) === 0 || lowerNoThe.indexOf(sub.toLowerCase()) === 0) found = sub;
   });
   if (found) return found;
   if (t.length >= 2 && t.length <= 32 && t.split(/\s+/).length <= 4) return t;
@@ -750,6 +1039,28 @@ function groupEpisodes(episodes) {
     return a.season - b.season;
   });
   return out;
+}
+
+/* The episode after the current one, in season then episode
+   order, across season boundaries (S1 E10 is followed by S2 E1).
+   Pure: episodes is the flat list for the item, current matches
+   by file, then by season and episode number. Null when there is
+   no next episode. */
+function findNextEpisode(episodes, current) {
+  if (!episodes || !episodes.length || !current) return null;
+  var flat = [];
+  groupEpisodes(episodes).forEach(function (g) {
+    g.episodes.forEach(function (ep) { flat.push(ep); });
+  });
+  var idx = -1;
+  flat.forEach(function (ep, i) {
+    if (idx !== -1) return;
+    if (current.file && ep.file && ep.file === current.file) { idx = i; return; }
+    if (current.season != null && current.episode != null &&
+        ep.season === current.season && ep.episode === current.episode) idx = i;
+  });
+  if (idx === -1 || idx + 1 >= flat.length) return null;
+  return flat[idx + 1];
 }
 
 /* A short slug for an episode title inside a history key: lower
@@ -810,6 +1121,85 @@ function episodeHistoryEntry(item) {
     }
   }
   return null;
+}
+
+/* The entry a show-level Play should resume: the most recently
+   watched in-progress entry for that item, whether it is an
+   episode entry or the season file itself. Null when nothing for
+   the show is in progress. */
+function bestResumeEntry(itemId) {
+  var best = null;
+  Object.keys(state.history).forEach(function (k) {
+    var h = state.history[k];
+    if (!h || h.id !== itemId) return;
+    if (!(h.progress > 0 && h.progress < 1)) return;
+    if (!best || (h.lastWatchedAt || 0) > (best.lastWatchedAt || 0)) best = h;
+  });
+  return best;
+}
+
+/* Total plays of one title across its own entry and every episode
+   entry, for the "Watched N times" line. */
+function watchCountFor(itemId) {
+  var n = 0;
+  Object.keys(state.history).forEach(function (k) {
+    var h = state.history[k];
+    if (h && h.id === itemId) n += h.watchCount || 0;
+  });
+  return n;
+}
+
+/* The item a show-level Play should open: the most recently
+   watched episode when one is in progress, so Play resumes the
+   episode and its saved place instead of restarting the season
+   file from 0:00. Otherwise the item itself. */
+function resolvePlayTarget(item) {
+  if (!item) return item;
+  var resume = bestResumeEntry(item.id);
+  if (!resume || !resume.historyId || resume.historyId === item.id) return item;
+  return {
+    id: item.id,
+    title: resume.title || item.title,
+    year: item.year,
+    type: item.type,
+    subjects: item.subjects || [],
+    file: resume.file || null,
+    historyId: resume.historyId
+  };
+}
+
+/* History grouped by title: one row per show, so a season-level
+   play and an episode play of the same show never list twice. The
+   row resumes the in-progress entry when there is one, else the
+   newest entry of the group. Input is already newest first and
+   group order follows the newest entry of each group. Each group
+   carries its entries' keys (removing the row removes them all)
+   and the summed play count. */
+function collapseHistoryEntries(entries) {
+  var byId = {};
+  var order = [];
+  (entries || []).forEach(function (h) {
+    if (!h || !h.id) return;
+    if (!byId[h.id]) { byId[h.id] = []; order.push(h.id); }
+    byId[h.id].push(h);
+  });
+  return order.map(function (id) {
+    var group = byId[id];
+    var rep = null;
+    var newest = null;
+    var watchCount = 0;
+    group.forEach(function (h) {
+      watchCount += h.watchCount || 0;
+      if (!newest || (h.lastWatchedAt || 0) > (newest.lastWatchedAt || 0)) newest = h;
+      if (h.progress > 0 && h.progress < 1 &&
+          (!rep || (h.lastWatchedAt || 0) > (rep.lastWatchedAt || 0))) rep = h;
+    });
+    return {
+      entry: rep || newest,
+      keys: group.map(function (h) { return h.historyId || h.id; }),
+      watchCount: watchCount
+    };
+  });
 }
 
 /* One episode per video file base name inside a multi-file series
@@ -1047,6 +1437,7 @@ function defaultProfileData() {
     history: {},
     myList: [],
     reactions: {},
+    ratings: {},
     hideWatched: false,
     theme: "flix",
     customAccent: "",
@@ -1079,6 +1470,7 @@ function sanitizeProfileData(d) {
   out.history = pruneHistory(out.history);
   if (!Array.isArray(out.myList)) out.myList = [];
   if (!out.reactions || typeof out.reactions !== "object") out.reactions = {};
+  if (!out.ratings || typeof out.ratings !== "object") out.ratings = {};
   if (typeof out.hideWatched !== "boolean") out.hideWatched = false;
   if (typeof out.theme !== "string" || !out.theme) out.theme = "flix";
   if (typeof out.customAccent !== "string") out.customAccent = "";
@@ -1902,6 +2294,17 @@ function reactionOf(id) {
   return r ? r.value : 0;
 }
 
+/* "Not for me" hides a title from rows, Browse and
+   recommendations, matching the How to Use text. Every listing
+   path filters through here, by item id. */
+function isNotForMe(id) {
+  return reactionOf(id) === -1;
+}
+
+function filterNotForMe(items) {
+  return (items || []).filter(function (it) { return !isNotForMe(it.id); });
+}
+
 /* A title counts as watched for hiding once it is finished. In-progress
    titles keep showing, so Continue Watching still works. The check
    uses the episode history key, not the bare item id, so an episode
@@ -1953,12 +2356,25 @@ function recordProgress(item, progress, position, duration, deferPersist) {
     type: item.type,
     subjects: item.subjects || (prev && prev.subjects) || [],
     adult: isAdultItem(item) || !!(prev && prev.adult),
+    /* The rating rides along so Continue Watching, Watch Again,
+       and History cards show the real badge instead of "No rating"
+       for every watched title; the previous value survives a play
+       whose item carries none. */
+    rating: item.rating != null ? item.rating : (prev ? prev.rating : null),
+    downloads: item.downloads != null ? item.downloads : (prev ? prev.downloads : 0),
     progress: progress,
     position: progress >= 1 ? 0 :
       (position != null ? Math.round(position) : (prev ? prev.position || 0 : 0)),
     duration: duration != null ? Math.round(duration) : (prev ? prev.duration || 0 : 0),
     lastWatchedAt: now,
-    watchCount: (prev ? prev.watchCount : 0) + (progress >= 1 && !wasFinished ? 1 : 0)
+    /* A play already counted when playback started (see
+       countPlayOnce) does not count again when it finishes; the
+       same viewing is one play, not two. The token check ties the
+       skip to the current open, so a stale counted key from an
+       earlier open never suppresses a later finish. */
+    watchCount: (prev ? prev.watchCount : 0) +
+      (progress >= 1 && !wasFinished &&
+        !(key === playCountedKey && playCountedToken === playerOpenToken) ? 1 : 0)
   };
   pruneHistory(state.history);
   if (deferPersist) saveStateSoon();
@@ -1968,8 +2384,13 @@ function recordProgress(item, progress, position, duration, deferPersist) {
 function toggleMyList(item) {
   var i = state.myList.findIndex(function (m) { return m.id === item.id; });
   if (i === -1) {
+    /* The snapshot carries the rating and downloads, so My List
+       cards show the real badge ("Archive 4.8") instead of "No
+       rating" for every saved title. */
     state.myList.unshift({ id: item.id, title: item.title, year: item.year, type: item.type,
-      subjects: item.subjects || [], adult: isAdultItem(item) });
+      subjects: item.subjects || [], adult: isAdultItem(item),
+      rating: item.rating != null ? item.rating : null,
+      downloads: item.downloads != null ? item.downloads : 0 });
     toast("Saved to My List");
   } else {
     state.myList.splice(i, 1);
@@ -1991,6 +2412,45 @@ function setReaction(item, value) {
       subjects: item.subjects || []
     };
     toast(value === 1 ? "Liked" : "Noted as not for you");
+  }
+  saveState();
+  /* A reaction changes what the rows show, so refresh them now:
+     without this a title marked "Not for me" sat in Horror and
+     Trending until the next reload. Home rebuilds from the
+     search cache, so this costs no new fetches; Browse re-runs
+     only when it is the visible view. */
+  if (typeof document !== "undefined" && document.getElementById) {
+    if (typeof homeLoaded !== "undefined" && homeLoaded) loadHome();
+    var bv = document.getElementById("browseView");
+    if (bv && bv.classList.contains("active")) runBrowse(true);
+    if (typeof adultLoaded !== "undefined" && adultLoaded) {
+      var av = document.getElementById("adultView");
+      if (av && av.classList.contains("active")) loadAdult();
+      else adultLoaded = false;
+    }
+  }
+}
+
+function ratingOf(id) {
+  var r = state.ratings && state.ratings[id];
+  return r ? r.value : 0;
+}
+
+/* A 1-5 star rating, per profile, stored locally like reactions.
+   Tapping the current rating clears it. */
+function setRating(item, value) {
+  if (!state.ratings) state.ratings = {};
+  if (ratingOf(item.id) === value) {
+    delete state.ratings[item.id];
+    toast("Rating cleared");
+  } else {
+    state.ratings[item.id] = {
+      value: value,
+      title: item.title,
+      year: item.year,
+      type: item.type
+    };
+    toast("Rated " + value + " out of 5");
   }
   saveState();
 }
@@ -2132,10 +2592,16 @@ function searchUrl(query, opts) {
    excluded at the query level unless the caller passes
    allowAdult (only the 18+ section does), and the results are
    filtered client side too, so a query syntax quirk can never leak
-   an adult title into the normal catalog. */
+   an adult title into the normal catalog. Collection pages are
+   excluded the same way, at both levels, so archive.org
+   collections ("Film Noir", "1950s Classic TV") never show up
+   as if they were titles. Duplicate uploads of one film collapse
+   to the best upload here, so every listing downstream sees one
+   card per film. */
 function searchArchive(query, opts) {
   opts = opts || {};
   var q = opts.allowAdult ? query : applyAdultExclusion(query);
+  q += " AND NOT mediatype:collection";
   var key = q + "|" + (opts.rows || ROW_SIZE) + "|" + (opts.sort || "") + "|" + (opts.start || 0);
   var cached = cacheGet(searchCache, key);
   if (cached) return Promise.resolve(searchResultCopy(cached));
@@ -2144,7 +2610,9 @@ function searchArchive(query, opts) {
     if (!res.ok) throw new Error("Archive search failed: " + res.status);
     return res.json();
   }).then(function (json) {
-    var docs = ((json.response || {}).docs || []).map(function (d) {
+    var docs = ((json.response || {}).docs || []).filter(function (d) {
+      return String((d && d.mediatype) || "").toLowerCase() !== "collection";
+    }).map(function (d) {
       return normalizeDoc(d, opts.type);
     }).filter(function (it) {
       return it.id && !isBlocked(it.id) && (opts.allowAdult || !isAdultItem(it));
@@ -2153,17 +2621,22 @@ function searchArchive(query, opts) {
     if (opts.allowAdult) {
       /* The section still drops mistagged titles on the override
          list, which are not adult whatever their tags say. */
-      docs = docs.filter(function (it) { return !isAdultOverridden(it.id); });
+      docs = dedupeItems(docs.filter(function (it) { return !isAdultOverridden(it.id); }));
       var out = { total: total, items: docs };
       cachePut(searchCache, key, out, SEARCH_CACHE_MAX);
       return out;
     }
     /* The identity gate drops untagged duplicates of 18+ titles,
        which neither the server exclusion nor the subject filter
-       can catch. The gated result is what gets cached. */
+       can catch. The gated result is what gets cached, and only
+       when the gate actually ran: caching an ungated result
+       (the pool was still loading past its 2 second wait) would
+       serve ungated titles for the rest of the session. An
+       ungated result is returned but not cached, so the next
+       search for it gates properly. */
     return applyIdentityGate(docs).then(function (gated) {
-      var gatedOut = { total: total, items: gated };
-      cachePut(searchCache, key, gatedOut, SEARCH_CACHE_MAX);
+      var gatedOut = { total: total, items: dedupeItems(gated) };
+      if (adultPoolSet) cachePut(searchCache, key, gatedOut, SEARCH_CACHE_MAX);
       return gatedOut;
     });
   });
@@ -2376,6 +2849,230 @@ function lookupReleaseYear(title) {
   });
 }
 
+/* ---------- Cast, crew and maturity ratings ---------- */
+/* Details shows director, cast and a maturity rating when the
+   user saved an OMDb or TMDB key and the provider answers.
+   Without a key nothing is fetched and no section appears; a
+   provider miss also leaves no section, never an empty one.
+   Results cache in localStorage like posters (30 days, 200
+   entries, misses for a day), keyed by cleaned title and year. */
+
+var CREDITS_CACHE_KEY = "archiveflix.credits.v1";
+var CREDITS_CACHE_MAX = 200;
+var CREDITS_CACHE_MS = 30 * 24 * 60 * 60 * 1000;
+var CREDITS_NULL_CACHE_MS = 24 * 60 * 60 * 1000;
+
+function creditsCacheValid(entry, now) {
+  if (!entry || typeof entry.ts !== "number") return false;
+  var age = (now || Date.now()) - entry.ts;
+  if (entry.data) return age <= CREDITS_CACHE_MS;
+  return age <= CREDITS_NULL_CACHE_MS;
+}
+
+function loadCreditsCache() {
+  try {
+    var raw = storeGet(CREDITS_CACHE_KEY);
+    if (!raw) return {};
+    var c = JSON.parse(raw);
+    if (!c || typeof c !== "object") return {};
+    var now = Date.now();
+    Object.keys(c).forEach(function (k) {
+      if (!creditsCacheValid(c[k], now)) delete c[k];
+    });
+    return c;
+  } catch (e) {
+    return {};
+  }
+}
+
+var creditsCache = loadCreditsCache();
+
+function saveCreditsCache() {
+  try {
+    var now = Date.now();
+    Object.keys(creditsCache).forEach(function (k) {
+      if (!creditsCacheValid(creditsCache[k], now)) delete creditsCache[k];
+    });
+    var keys = Object.keys(creditsCache).filter(function (k) {
+      return creditsCache[k] && creditsCache[k].data;
+    });
+    if (keys.length > CREDITS_CACHE_MAX) {
+      keys.sort(function (a, b) { return (creditsCache[a].ts || 0) - (creditsCache[b].ts || 0); });
+      keys.slice(0, keys.length - CREDITS_CACHE_MAX).forEach(function (k) { delete creditsCache[k]; });
+    }
+    storeSet(CREDITS_CACHE_KEY, JSON.stringify(creditsCache));
+  } catch (e) { /* private mode or full: credits just re-resolve next visit */ }
+}
+
+function creditsCacheKey(title, year) {
+  return cleanSearchTitle(title).toLowerCase() + "|" + (year || "");
+}
+
+/* Split an OMDb comma list ("A, B, C") into names, dropping N/A. Pure. */
+function omdbNameList(s) {
+  if (!s || s === "N/A") return [];
+  return String(s).split(",").map(function (n) { return n.trim(); }).filter(Boolean);
+}
+
+/* One OMDb record: Director, Actors and Rated in a single call.
+   type "show" asks for a series record, anything else a movie. */
+function omdbDetails(title, year, type) {
+  var key = state.omdbKey;
+  if (!key) return Promise.resolve(null);
+  if (providerDisabled("omdb")) return Promise.resolve(null);
+  var t = cleanSearchTitle(title);
+  if (!t) return Promise.resolve(null);
+  var negKey = "omdb|credits|" + t.toLowerCase() + "|" + (year || "");
+  if (negativeCached(negKey)) return Promise.resolve(null);
+  var url = "https://www.omdbapi.com/?apikey=" + encodeURIComponent(key) +
+    "&t=" + encodeURIComponent(t) + (year ? "&y=" + year : "") +
+    "&type=" + (type === "show" ? "series" : "movie");
+  return fetchWithTimeout(url, FETCH_TIMEOUT_POSTER_MS).then(function (res) {
+    var kind = omdbErrorKind(null, res.status);
+    if (kind) { disableProvider("omdb", kind); negativeCachePut(negKey); return null; }
+    if (!res.ok) { negativeCachePut(negKey); return null; }
+    return res.json();
+  }).then(function (j) {
+    if (!j) return null;
+    var kind = omdbErrorKind(j, 200);
+    if (kind) { disableProvider("omdb", kind); return null; }
+    if (j.Response !== "True") { negativeCachePut(negKey); return null; }
+    var out = {
+      director: (j.Director && j.Director !== "N/A") ? j.Director : "",
+      cast: omdbNameList(j.Actors).slice(0, 5),
+      rated: (j.Rated && j.Rated !== "N/A") ? j.Rated : "",
+      source: "omdb"
+    };
+    if (!out.director && !out.cast.length && !out.rated) { negativeCachePut(negKey); return null; }
+    return out;
+  }).catch(function () { negativeCachePut(negKey); return null; });
+}
+
+/* Pick the TMDB result that best matches a title and year, the
+   way pickTmdbPoster scores posters. Returns the result object
+   or null when nothing matches closely enough. Pure, so the node
+   test can drive it. */
+function pickTmdbMatch(results, title, year) {
+  var want = normalizeTitleForMatch(title);
+  var best = null, bestScore = 0;
+  (results || []).forEach(function (r) {
+    var score = 0;
+    var name = normalizeTitleForMatch(r.title || r.name);
+    if (want && name === want) score += 4;
+    else if (want && name && (name.indexOf(want) !== -1 || want.indexOf(name) !== -1)) score += 2;
+    var y = tmdbResultYear(r);
+    if (year && y && y === Number(year)) score += 2;
+    if (score > bestScore) { bestScore = score; best = r; }
+  });
+  return best;
+}
+
+/* One TMDB GET that is not a search (credits, release dates,
+   content ratings). A 401 or 429 disables TMDB for the session,
+   the way tmdbSearchRaw does. */
+function tmdbGet(path, key) {
+  var url = "https://api.themoviedb.org/3" + path +
+    (path.indexOf("?") === -1 ? "?" : "&") + "api_key=" + encodeURIComponent(key);
+  return fetchWithTimeout(url, FETCH_TIMEOUT_POSTER_MS).then(function (res) {
+    if (res.status === 401) { disableProvider("tmdb", "invalid-key"); return null; }
+    if (res.status === 429) { disableProvider("tmdb", "rate-limit"); return null; }
+    if (!res.ok) return null;
+    return res.json();
+  }).catch(function () { return null; });
+}
+
+/* TMDB credits plus the US maturity rating: the release_dates
+   certification for movies, the content_ratings rating for TV. */
+function tmdbDetails(title, year, type) {
+  var key = state.tmdbKey;
+  if (!key) return Promise.resolve(null);
+  if (providerDisabled("tmdb")) return Promise.resolve(null);
+  var t = cleanSearchTitle(title);
+  if (!t) return Promise.resolve(null);
+  var negKey = "tmdb|credits|" + t.toLowerCase() + "|" + (year || "") + "|" + (type || "");
+  if (negativeCached(negKey)) return Promise.resolve(null);
+  var endpoint = type === "show" ? "tv" : "movie";
+  return tmdbSearchRaw(endpoint, t, year, key).then(function (results) {
+    var match = pickTmdbMatch(results, t, year);
+    if (!match) { negativeCachePut(negKey); return null; }
+    var creditsP = tmdbGet("/" + endpoint + "/" + match.id + "/credits", key);
+    var ratingP = endpoint === "movie"
+      ? tmdbGet("/movie/" + match.id + "/release_dates", key)
+      : tmdbGet("/tv/" + match.id + "/content_ratings", key);
+    return Promise.all([creditsP, ratingP]).then(function (parts) {
+      var credits = parts[0] || {};
+      var ratingJson = parts[1] || {};
+      var cast = ((credits.cast || []).slice(0, 5)).map(function (c) { return c.name; }).filter(Boolean);
+      var director = "";
+      (credits.crew || []).forEach(function (c) {
+        if (!director && c.job === "Director") director = c.name || "";
+      });
+      var rated = "";
+      if (endpoint === "movie") {
+        (ratingJson.results || []).forEach(function (r) {
+          if (r.iso_3166_1 !== "US") return;
+          (r.release_dates || []).forEach(function (rd) {
+            if (!rated && rd.certification) rated = rd.certification;
+          });
+        });
+      } else {
+        (ratingJson.results || []).forEach(function (r) {
+          if (!rated && r.iso_3166_1 === "US" && r.rating) rated = r.rating;
+        });
+      }
+      var out = { director: director, cast: cast, rated: rated, source: "tmdb" };
+      if (!out.director && !out.cast.length && !out.rated) { negativeCachePut(negKey); return null; }
+      return out;
+    });
+  }).catch(function () { negativeCachePut(negKey); return null; });
+}
+
+/* Cast, crew and maturity rating for one title: the credits
+   cache, then OMDb, then TMDB. Null when no key is saved or
+   neither provider answers. Positives and misses both cache. */
+function getTitleCredits(item) {
+  if (!item || (!state.omdbKey && !state.tmdbKey)) return Promise.resolve(null);
+  var ck = creditsCacheKey(item.title, item.year);
+  var cached = creditsCache[ck];
+  if (cached && creditsCacheValid(cached)) return Promise.resolve(cached.data || null);
+  if (cached) delete creditsCache[ck];
+  return omdbDetails(item.title, item.year, item.type).then(function (d) {
+    if (d) return d;
+    return tmdbDetails(item.title, item.year, item.type);
+  }).then(function (d) {
+    creditsCache[ck] = { data: d || null, ts: Date.now() };
+    saveCreditsCache();
+    return d || null;
+  }).catch(function () { return null; });
+}
+
+/* Fill the cast and maturity section of an open details sheet.
+   No key means no section and no fetch; a miss means no section.
+   Lines that have no data are left out, so the section never
+   shows an empty label. */
+function renderDetailsCredits(bodyEl, item) {
+  if (!bodyEl || !item) return;
+  if (!state.omdbKey && !state.tmdbKey) return;
+  getTitleCredits(item).then(function (d) {
+    if (!d) return;
+    if (document.getElementById("detailsSheet").hidden) return;
+    if (!currentDetails || currentDetails.id !== item.id) return;
+    var info = bodyEl.querySelector(".details-info");
+    if (!info || info.querySelector(".details-credits")) return;
+    var lines = [];
+    if (d.director) lines.push("Directed by " + d.director);
+    if (d.cast && d.cast.length) lines.push("Cast: " + d.cast.join(", "));
+    if (d.rated) lines.push("Maturity rating: " + d.rated);
+    if (!lines.length) return;
+    var div = document.createElement("div");
+    div.className = "details-credits";
+    div.innerHTML = lines.map(function (l) { return "<p>" + esc(l) + "</p>"; }).join("");
+    var actions = info.querySelector(".details-actions");
+    if (actions) info.insertBefore(div, actions);
+    else info.appendChild(div);
+  });
+}
+
 /* ---------- Real movie posters ---------- */
 /* Cards show the Archive thumbnail right away, then upgrade to a real
    movie poster when one resolves. Layers, best first:
@@ -2387,7 +3084,11 @@ function lookupReleaseYear(title) {
    Every layer fails silently into the next, and resolved posters are
    cached in localStorage so they are not re-fetched every visit. */
 
-var POSTER_CACHE_KEY = "archiveflix.posters.v1";
+/* v2: v1 cached wrong Commons posters (a COVID poster for The
+   General, a wrong-film poster for David and Goliath), and a
+   30-day cache would have kept serving them after the matcher
+   was fixed. Bumping the key re-resolves every poster once. */
+var POSTER_CACHE_KEY = "archiveflix.posters.v2";
 var POSTER_CACHE_MAX = 400;
 var POSTER_CACHE_MS = 30 * 24 * 60 * 60 * 1000;
 /* A failed lookup is cached as "no poster" for a day only, not 30:
@@ -2491,13 +3192,21 @@ function pickArchivePosterFile(files) {
 /* Pick the best poster from a Wikimedia Commons image search result.
    pages is an array of {title, imageinfo: [{url, thumburl, width, height, mime}]}.
    Only files named like posters, covers or lobby cards count, so film
-   stills and logos do not slip in; title words break ties. A file
-   dated to a different year than the film is the wrong poster (a
-   remake's, usually) and is skipped outright. */
+   stills and logos do not slip in. The file name must also match the
+   film's title: every significant title word (or the full title
+   phrase) has to appear in it. The old matcher only needed the word
+   "poster", so a Commons search for "The General" poster returned a
+   COVID-19 SOP poster (it says "poster" and nothing else matching)
+   and "David and Goliath" returned a Goliath and the Dragon poster
+   (one word of two). A file dated to a different year than the film
+   is the wrong poster (a remake's, usually) and is skipped outright.
+   No match returns null, and the Archive thumbnail stays: no poster
+   is better than the wrong poster. */
 function pickCommonsPoster(pages, title, year) {
   pages = pages || [];
   var words = cleanSearchTitle(title).toLowerCase().split(/[^a-z0-9]+/)
     .filter(function (w) { return w.length > 3; });
+  var phrase = cleanSearchTitle(title).toLowerCase();
   var best = null, bestScore = 0, bestWidth = 0;
   pages.forEach(function (p) {
     var info = (p.imageinfo || [])[0];
@@ -2513,12 +3222,19 @@ function pickCommonsPoster(pages, title, year) {
     if (name.indexOf("cover") !== -1) score += 2;
     if (name.indexOf("lobby") !== -1) score += 2;
     if (score === 0) return;
+    var matched = 0;
+    words.forEach(function (w) { if (name.indexOf(w) !== -1) matched++; });
+    var phraseHit = !!phrase && name.indexOf(phrase) !== -1;
+    if (!phraseHit) {
+      if (!words.length || matched < words.length) return;
+    }
+    score += matched * 2;
+    if (phraseHit) score += 2;
     if (year) {
       var years = name.match(/\b(19|20)\d{2}\b/g) || [];
       if (years.length && years.indexOf(String(year)) === -1) return;
       if (years.indexOf(String(year)) !== -1) score += 2;
     }
-    words.forEach(function (w) { if (name.indexOf(w) !== -1) score += 1; });
     if (score > bestScore || (score === bestScore && Number(info.width) > bestWidth)) {
       bestScore = score;
       bestWidth = Number(info.width);
@@ -2632,7 +3348,7 @@ function tmdbSearchRaw(endpoint, q, year, key) {
    Pure, so the node test can drive it. */
 function pickTmdbPoster(results, title, year) {
   var want = normalizeTitleForMatch(title);
-  var best = null, bestScore = -1;
+  var best = null, bestScore = 0;
   (results || []).forEach(function (r) {
     if (!r.poster_path) return;
     var score = 0;
@@ -2641,6 +3357,9 @@ function pickTmdbPoster(results, title, year) {
     else if (want && name && (name.indexOf(want) !== -1 || want.indexOf(name) !== -1)) score += 2;
     var y = tmdbResultYear(r);
     if (year && y && y === Number(year)) score += 2;
+    /* A result that matches neither the title nor the year scores
+       0 and never wins: TMDB's first result for a fuzzy query is
+       not always the film. */
     if (score > bestScore) {
       bestScore = score;
       best = r;
@@ -3003,14 +3722,16 @@ function guardThumbnail(img, item, kind) {
 }
 
 /* ---------- Toasts ---------- */
-/* One toast at a time, queued in order, never replaced mid-read.
-   Short confirmations show 4 seconds; longer messages (over 50
+/* One toast at a time, always the latest action: a new toast
+   replaces the one on screen at once instead of queueing behind
+   it, so the message never lags behind what the user just did.
+   Short confirmations show 5 seconds; longer messages (over 50
    characters) get 7 seconds, inside the library's 4 to 10 second
    range. An optional second argument adds one action button, used
    for Undo on destructive toasts. Existing toast(msg) callers are
    unaffected. */
 
-var TOAST_SHORT_MS = 4000;
+var TOAST_SHORT_MS = 5000;
 var TOAST_LONG_MS = 7000;
 var TOAST_LONG_MIN_LENGTH = 50;
 var TOAST_QUEUE_MAX = 5;
@@ -3021,7 +3742,10 @@ function toastDurationFor(msg) {
 }
 
 /* A tiny FIFO queue for toasts. Pure, so the node test can drive
-   the ordering without a DOM. */
+   the ordering without a DOM. Toast display itself no longer
+   queues: a new toast replaces the one on screen at once. This
+   helper is kept for the node test and any caller that needs a
+   small bounded queue. */
 function makeToastQueue() {
   var queue = [];
   return {
@@ -3037,40 +3761,37 @@ function makeToastQueue() {
   };
 }
 
-var toastQueue = makeToastQueue();
 var toastShowing = false;
 var toastTimer = null;
 
+/* Replace, never queue: the toast on screen is dropped and the
+   new message shows at once with a fresh timer, so a burst of
+   actions (tapping themes quickly) always ends on the latest
+   one. A replaced Undo toast loses its Undo button; the action
+   it confirmed already saved, so nothing is lost but the chance
+   to undo it. */
 function toast(msg, options) {
-  toastQueue.push({ msg: msg, options: options || null });
-  showNextToast();
-}
-
-function showNextToast() {
-  if (toastShowing) return;
-  var next = toastQueue.next();
-  if (!next) return;
-  toastShowing = true;
   var el = document.getElementById("toast");
   el.innerHTML = "";
   var span = document.createElement("span");
-  span.textContent = next.msg;
+  span.textContent = msg;
   el.appendChild(span);
-  if (next.options && next.options.action) {
+  if (options && options.action) {
     var btn = document.createElement("button");
     btn.className = "btn small";
     btn.type = "button";
-    btn.textContent = next.options.action.label;
+    btn.textContent = options.action.label;
     btn.style.marginLeft = "12px";
     btn.addEventListener("click", function () {
       hideToast();
-      next.options.action.onClick();
+      options.action.onClick();
     });
     el.appendChild(btn);
   }
   el.hidden = false;
+  toastShowing = true;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideToast, toastDurationFor(next.msg));
+  toastTimer = setTimeout(hideToast, toastDurationFor(msg));
 }
 
 function hideToast() {
@@ -3078,7 +3799,6 @@ function hideToast() {
   var el = document.getElementById("toast");
   el.hidden = true;
   toastShowing = false;
-  showNextToast();
 }
 
 /* ---------- Dialog focus management ---------- */
@@ -3194,7 +3914,7 @@ function typeLabel(type) {
 function ratingBadge(item) {
   if (item.imdbRating != null) return "IMDb " + item.imdbRating.toFixed(1);
   if (item.rating != null) return "Archive " + item.rating.toFixed(1);
-  return "";
+  return "No rating";
 }
 
 /* A card button. opts.adultContext marks cards inside the 18+
@@ -3205,7 +3925,7 @@ function cardEl(item, opts) {
   var adultCtx = !!(opts && opts.adultContext);
   var btn = document.createElement("button");
   btn.className = "card";
-  btn.setAttribute("aria-label", item.title + (item.year ? " (" + item.year + ")" : ""));
+  btn.setAttribute("aria-label", titleWithYear(item.title, item.year));
   var badge = ratingBadge(item);
   var h = item.id && state.history[historyKey(item)];
   var prog = h ? h.progress : 0;
@@ -3456,7 +4176,7 @@ function yearClauseRange(from, to) {
 
 var ROW_DEFS = [
   { id: "trending",  title: "Trending Now", q: MOVIES, sort: "downloads desc", skipNoYear: true },
-  { id: "toprated",  title: "Top Rated", q: MOVIES, sort: "avg_rating desc", rows: 40, byRating: true, skipNoYear: true },
+  { id: "toprated",  title: "Top Rated", q: MOVIES, sort: "downloads desc", rows: 100, byRating: true, skipNoYear: true },
   { id: "horror",    title: "Horror", q: MOVIES + " AND subject:horror", sort: "downloads desc" },
   { id: "comedy",    title: "Comedy", q: MOVIES + " AND subject:comedy", sort: "downloads desc" },
   { id: "scifi",     title: "Sci-Fi", q: MOVIES + ' AND subject:"science fiction"', sort: "downloads desc" },
@@ -3489,10 +4209,10 @@ function loadRow(def) {
       });
       if (def.skipNoYear) items = items.filter(function (it) { return it.year != null; });
       if (def.byRating) {
+        /* Ranked by review-weighted score, not raw avg_rating:
+           the raw sort's top is all single-review 5.0s. */
         items = items.filter(function (it) { return it.rating != null; })
-          .sort(function (a, b) {
-            return (b.rating - a.rating) || (b.downloads - a.downloads);
-          });
+          .sort(topRatedSort);
       }
       return items.slice(0, ROW_SIZE);
     });
@@ -3519,6 +4239,7 @@ function loadDirectors() {
         if (!seen[it.id]) { seen[it.id] = true; items.push(it); }
       });
     });
+    items = dedupeItems(items);
     items.sort(function (a, b) { return b.downloads - a.downloads; });
     return items.slice(0, ROW_SIZE);
   });
@@ -3545,17 +4266,19 @@ function loadCartoons() {
     res[1].items.forEach(function (it) {
       if (!seen[it.id] && !isYoutubeRip(it.id)) { seen[it.id] = true; items.push(it); }
     });
-    return items.slice(0, ROW_SIZE);
+    return dedupeItems(items).slice(0, ROW_SIZE);
   });
 }
 
 /* Top IMDb: real IMDb ratings only with a user key. Without one, Archive
    ratings are shown and labeled as Archive ratings, never as IMDb. */
 function loadTopImdb() {
-  return searchArchive(MOVIES, { rows: 40, sort: "avg_rating desc", type: "movie" })
+  return searchArchive(MOVIES, { rows: 100, sort: "downloads desc", type: "movie" })
     .then(function (res) {
+      /* Review-weighted, like Top Rated: the raw avg_rating sort
+         is all single-review 5.0s at the top. */
       var items = res.items.filter(function (it) { return it.rating != null && it.year != null; })
-        .sort(function (a, b) { return (b.rating - a.rating) || (b.downloads - a.downloads); })
+        .sort(topRatedSort)
         .slice(0, 18);
       if (!state.omdbKey) return { items: items, imdb: false };
       var jobs = items.slice(0, 12).map(function (it) {
@@ -3588,8 +4311,10 @@ var homeLoaded = false;
 
 /* How many Home rows load at once. The hero row is first, so the
    hero and the top of the page fill immediately; rows past this
-   count load when they near the viewport. */
-var HOME_IMMEDIATE_ROWS = 3;
+   count load when they near the viewport. Six covers the
+   above-the-fold rows on a desktop first paint; three left rows
+   the user could already see sitting on skeletons. */
+var HOME_IMMEDIATE_ROWS = 6;
 
 function rowLoadsImmediately(index) {
   return index < HOME_IMMEDIATE_ROWS;
@@ -3613,7 +4338,7 @@ function ensureHomeRowObserver() {
         load();
       }
     });
-  }, { rootMargin: "800px 0px" });
+  }, { rootMargin: "1200px 0px" });
   return homeRowObserver;
 }
 
@@ -3670,11 +4395,13 @@ function renderHeroSkeleton() {
 function renderHero(item) {
   var hero = document.getElementById("hero");
   if (!item) {
+    hero.classList.add("hero-fallback");
     hero.innerHTML = '<div class="hero-content"><p class="hero-kicker">ARCHIVEFLIX</p>' +
       "<h2>Free movies, shows and cartoons</h2>" +
       '<p class="hero-desc">The catalog could not load. Check your connection, then reload the page.</p></div>';
     return;
   }
+  hero.classList.remove("hero-fallback");
   hero.innerHTML =
     '<img class="hero-img" src="' + posterUrl(item.id) + '" alt="" onerror="this.style.display=\'none\'">' +
     '<div class="hero-content"><p class="hero-kicker">Featured film</p>' +
@@ -3691,7 +4418,7 @@ function renderHero(item) {
     upgradePoster(heroImg, item, "hero");
     guardThumbnail(heroImg, item, "hero");
   }
-  document.getElementById("heroPlay").addEventListener("click", function () { openPlayer(item); });
+  document.getElementById("heroPlay").addEventListener("click", function () { openPlayer(resolvePlayTarget(item)); });
   document.getElementById("heroDetails").addEventListener("click", function () { openDetails(item); });
   wireExpandableDescs(hero);
 }
@@ -3702,7 +4429,8 @@ function renderHero(item) {
 function continueWatchingItems(adultOnly) {
   return Object.keys(state.history).map(function (id) { return state.history[id]; })
     .filter(function (h) {
-      return h.progress > 0 && h.progress < 1 && isAdultEntry(h) === !!adultOnly;
+      return h.progress > 0 && h.progress < 1 && isAdultEntry(h) === !!adultOnly &&
+        !isNotForMe(h.id);
     })
     .sort(function (a, b) { return b.lastWatchedAt - a.lastWatchedAt; })
     .map(function (h) {
@@ -3715,7 +4443,8 @@ function continueWatchingItems(adultOnly) {
 function watchAgainItems(adultOnly) {
   return Object.keys(state.history).map(function (id) { return state.history[id]; })
     .filter(function (h) {
-      return h.progress >= 1 && isAdultEntry(h) === !!adultOnly;
+      return h.progress >= 1 && isAdultEntry(h) === !!adultOnly &&
+        !isNotForMe(h.id);
     })
     .sort(function (a, b) { return b.lastWatchedAt - a.lastWatchedAt; })
     .map(function (h) {
@@ -3768,17 +4497,111 @@ function firstSignalSubject(subjects) {
   return null;
 }
 
+/* Shared-subject count between a seed item and a candidate,
+   ignoring generic medium tags. The similarity signal for More
+   Like This. Pure, so the node test can drive it. */
+function sharedSignalCount(seedSubjects, subjects) {
+  var seed = {};
+  (seedSubjects || []).forEach(function (s) {
+    var low = String(s || "").toLowerCase().trim();
+    if (low && GENERIC_SUBJECT_STOPLIST.indexOf(low) === -1 &&
+        GENERIC_SHOW_SUBJECTS.indexOf(low) === -1) seed[low] = true;
+  });
+  var n = 0;
+  var seen = {};
+  (subjects || []).forEach(function (s) {
+    var low = String(s || "").toLowerCase().trim();
+    if (seed[low] && !seen[low]) { seen[low] = true; n++; }
+  });
+  return n;
+}
+
+/* How similar a candidate is to a seed: shared subjects first,
+   then same type, then era proximity. A candidate from a
+   different era with one shared subject scores low. Pure, so
+   the node test can drive it. */
+function similarScore(seed, it) {
+  var shared = sharedSignalCount(seed.subjects, it.subjects);
+  var score = shared * 10;
+  if (seed.type && it.type === seed.type) score += 3;
+  if (seed.year != null && it.year != null) {
+    var gap = Math.abs(seed.year - it.year);
+    if (gap <= 5) score += 5;
+    else if (gap <= 15) score += 3;
+    else if (gap <= 25) score += 1;
+    else score -= 5;
+  }
+  return { score: score, shared: shared };
+}
+
+/* Rank candidates for More Like This: the seed itself never
+   appears (by id, or by dedupe key, so another upload of the
+   same film is out too), and items with no shared signal are
+   dropped outright. Strong matches (two shared subjects, or one
+   shared subject plus same type and era within 25 years) come
+   first; weaker matches backfill after them, so the row prefers
+   real neighbours but never goes empty when the query only found
+   loose ones. Pure, so the node test can drive it. */
+function rankSimilar(seed, items) {
+  var seedKey = dedupeKey(seed);
+  var scored = [];
+  (items || []).forEach(function (it) {
+    if (it.id === seed.id) return;
+    if (seedKey && dedupeKey(it) === seedKey) return;
+    var s = similarScore(seed, it);
+    if (s.shared < 1) return;
+    var strong = s.shared >= 2 ||
+      (s.shared >= 1 && it.type === seed.type && seed.year != null &&
+       it.year != null && Math.abs(seed.year - it.year) <= 25);
+    scored.push({ item: it, score: s.score, strong: strong });
+  });
+  scored.sort(function (a, b) {
+    if (a.strong !== b.strong) return a.strong ? -1 : 1;
+    return (b.score - a.score) || ((b.item.downloads || 0) - (a.item.downloads || 0));
+  });
+  return scored.map(function (s) { return s.item; });
+}
+
+/* The dedupe keys of everything the user has watched or liked:
+   recommendation rows exclude these, so a "Because you watched"
+   row never recommends the seed title itself. */
+function seedDedupeKeys() {
+  var keys = {};
+  Object.keys(state.history).forEach(function (k) {
+    var h = state.history[k];
+    var dk = dedupeKey({ title: h.title, year: storedYear(h) });
+    if (dk) keys[dk] = true;
+  });
+  Object.keys(state.reactions).forEach(function (id) {
+    var r = state.reactions[id];
+    if (r.value !== 1) return;
+    var dk = dedupeKey({ title: r.title, year: r.year });
+    if (dk) keys[dk] = true;
+  });
+  return keys;
+}
+
 /* The user's strongest taste signals: finished titles count 1,
    in-progress titles count a half, likes count 2. Returns the top
    two subjects with the types of the items that seeded them, so a
-   user who only watches shows gets show rows, not movie rows. */
+   user who only watches shows gets show rows, not movie rows.
+   The returned subject keeps the casing it was stored with, so
+   the row label reads "Drama", not "drama". A subject that is
+   just the seeding title itself ("twilight zone 1959" on The
+   Twilight Zone) is not a taste and never seeds a row: without
+   that, the row queries the show's own name and comes back
+   holding only the show itself. */
 function topSignalSubjects() {
   var counts = {};
   var typesBySubject = {};
-  function addSubjects(subjects, weight, type) {
+  var casingBySubject = {};
+  function addSubjects(subjects, weight, type, title) {
+    var titleKey = titleMatchKey(title);
     (subjects || []).forEach(function (s) {
       var k = String(s).toLowerCase();
+      if (titleKey && titleMatchKey(s) === titleKey) return;
       counts[k] = (counts[k] || 0) + weight;
+      if (!casingBySubject[k]) casingBySubject[k] = String(s).trim();
       if (!typesBySubject[k]) typesBySubject[k] = [];
       if (type && typesBySubject[k].indexOf(type) === -1) typesBySubject[k].push(type);
     });
@@ -3790,8 +4613,8 @@ function topSignalSubjects() {
        from its own data; the identity gate catches it when the
        adult pool has loaded. */
     if (adultPoolSet && isInAdultPool(h.title, storedYear(h))) return;
-    if (h.progress >= 1) addSubjects(h.subjects, 1, h.type);
-    else if (h.progress > 0) addSubjects(h.subjects, 0.5, h.type);
+    if (h.progress >= 1) addSubjects(h.subjects, 1, h.type, h.title);
+    else if (h.progress > 0) addSubjects(h.subjects, 0.5, h.type, h.title);
   });
   /* Reactions never stored an adult field, so an old reaction on
      an adult title would seed normal rows. Skip reactions whose
@@ -3807,13 +4630,15 @@ function topSignalSubjects() {
     if (isAdultItem(r)) return;
     if (adultHistoryIds[id]) return;
     if (adultPoolSet && isInAdultPool(r.title, r.year)) return;
-    addSubjects(r.subjects, 2, r.type);
+    addSubjects(r.subjects, 2, r.type, r.title);
   });
   return Object.keys(counts)
     .filter(function (k) { return GENERIC_SUBJECT_STOPLIST.indexOf(k) === -1 && k.length > 2 && k.length < 40; })
     .sort(function (a, b) { return counts[b] - counts[a]; })
     .slice(0, 2)
-    .map(function (k) { return { subject: k, types: typesBySubject[k] || ["movie"] }; });
+    .map(function (k) {
+      return { subject: casingBySubject[k] || k, key: k, types: typesBySubject[k] || ["movie"] };
+    });
 }
 
 function renderPersonalShelves(container) {
@@ -3832,20 +4657,23 @@ function renderPersonalShelves(container) {
     fillRow(s2, wa);
   }
   var subjects = topSignalSubjects();
+  var seeds = seedDedupeKeys();
   subjects.forEach(function (sig) {
-    var label = sig.subject.charAt(0).toUpperCase() + sig.subject.slice(1);
-    var s3 = rowEl("Because you watched " + label, "Picked from what you watch and like");
+    var s3 = rowEl("Because you watched " + sig.subject, "Picked from what you watch and like");
     s3.classList.add("personal-shelf");
     container.appendChild(s3);
     var scroll = s3.querySelector(".row-scroll");
     scroll.innerHTML = '<div class="skeleton-row"><div class="skeleton-card"></div>' +
       '<div class="skeleton-card"></div><div class="skeleton-card"></div></div>';
-    /* The row matches the seeded items' types, not movies only. */
+    /* The row matches the seeded items' types, not movies only.
+       Watched and liked titles are excluded by dedupe key, so
+       the row never recommends the seed title itself. */
     searchArchive(typeQueryForTypes(sig.types) + ' AND subject:"' + sig.subject.replace(/"/g, "") + '"',
       { rows: 30, sort: "downloads desc", type: sig.types.length === 1 ? sig.types[0] : undefined })
       .then(function (res) {
-        var items = filterVisible(res.items).filter(function (it) {
-          return reactionOf(it.id) !== -1;
+        var items = filterNotForMe(filterVisible(res.items)).filter(function (it) {
+          var dk = dedupeKey(it);
+          return !dk || !seeds[dk];
         }).slice(0, ROW_SIZE);
         if (!items.length) { s3.remove(); return; }
         fillRow(s3, items);
@@ -3879,7 +4707,7 @@ function loadHome() {
           var sub = section.querySelector(".row-sub");
           if (sub) sub.textContent = "Sorted by real IMDb ratings from your OMDb key.";
         }
-        items = filterVisible(items).filter(function (it) { return reactionOf(it.id) !== -1; });
+        items = filterNotForMe(filterVisible(items));
         var heroItems = heroPicker.consider(items, def.id === "trending");
         if (heroItems) renderHero(heroPick(heroItems));
         fillRow(section, items, "Nothing found here right now.");
@@ -4093,13 +4921,16 @@ function browseQuery() {
   return buildBrowseQuery(browseState);
 }
 
-/* The server-side sort for a Browse sort choice. Title A to Z and
-   the year sorts run on the server (titleSorter and the year
-   field, verified live against advancedsearch.php), so they page
-   through the whole catalog with Load More instead of capping at
-   the first 100 titles. Year order follows the Archive's indexed
-   year field, which sometimes holds the upload year; the count
-   line says so. */
+/* The server-side sort for a Browse sort choice. Title A to Z
+   runs on the server (titleSorter, verified live against
+   advancedsearch.php), so it pages through the whole catalog
+   with Load More. The year sorts also start from the server's
+   year field, but only as a rough pre-order for paging: the
+   indexed year often holds the upload year (verified live
+   2026-11-16: a year-desc page opened with indexed years 2026,
+   2020 and 2015 over 1950s films, so the displayed years read
+   1957, 1954, 1951, then 1959s), so sortClientSide re-sorts
+   every fetched page by the derived release year. */
 function sortParamFor(sort) {
   if (sort === "trending") return "downloads desc";
   if (sort === "rated") return "avg_rating desc";
@@ -4114,15 +4945,20 @@ function browseSortParam() {
   return sortParamFor(browseState.sort);
 }
 
-/* Client-side re-sort, only for the Top rated sort, where the
-   server order and the displayed Archive rating can disagree
-   slightly within a page. A to Z and the year sorts are ordered
-   by the server now, so they are not re-sorted here: re-sorting
-   one page would break the global order. */
-function sortClientSide(items) {
-  var s = browseState.sort;
+/* Client-side re-sort of one fetched Browse page. Top rated
+   re-sorts by review-weighted score, where the server order and
+   the displayed Archive rating can disagree. The year sorts
+   re-sort by the derived release year: the server can only sort
+   by its indexed year field, which often holds the upload year,
+   so without this the displayed years come out scrambled. A to Z
+   stays server-ordered. sortOverride lets the node test drive
+   one sort without touching browseState. */
+function sortClientSide(items, sortOverride) {
+  var s = sortOverride || browseState.sort;
   var copy = items.slice();
-  if (s === "rated") copy.sort(function (a, b) { return (b.rating || 0) - (a.rating || 0); });
+  if (s === "rated") copy.sort(topRatedSort);
+  else if (s === "year-desc") copy.sort(function (a, b) { return compareDerivedYear(a, b, true); });
+  else if (s === "year-asc") copy.sort(function (a, b) { return compareDerivedYear(a, b, false); });
   return copy;
 }
 
@@ -4138,7 +4974,10 @@ function isYoutubeRipFiltered(item, type) {
 
 /* The client-side filters for one fetched Browse page, in order:
    YouTube rips, minimum rating, year, hide-watched, not-for-me,
-   then the client-side sort. */
+   cross-page dedupe, then the client-side sort. searchArchive
+   dedupes within a page, but the same film can still return on
+   two different pages under two uploads, so shown keys are
+   remembered for the whole Browse run and later copies dropped. */
 function filterBrowseItems(items) {
   items = items.filter(function (it) { return !isYoutubeRipFiltered(it, browseState.type); });
   if (browseState.minRating > 0) {
@@ -4147,7 +4986,15 @@ function filterBrowseItems(items) {
   if (yearFilterActive(browseState)) {
     items = items.filter(function (it) { return matchesYearFilter(it, browseState); });
   }
-  items = filterVisible(items).filter(function (it) { return reactionOf(it.id) !== -1; });
+  items = filterNotForMe(filterVisible(items));
+  if (!browseState.seenKeys) browseState.seenKeys = {};
+  items = items.filter(function (it) {
+    var dk = dedupeKey(it);
+    if (!dk) return true;
+    if (browseState.seenKeys[dk]) return false;
+    browseState.seenKeys[dk] = true;
+    return true;
+  });
   return sortClientSide(items);
 }
 
@@ -4197,10 +5044,18 @@ function runBrowse(reset) {
      re-runs once below, so a search typed during a slow fetch is
      never silently dropped. */
   if (!seq) return;
-  if (reset) { browseState.start = 0; document.getElementById("browseGrid").innerHTML = ""; }
+  if (reset) {
+    browseState.start = 0;
+    browseState.seenKeys = {};
+    document.getElementById("browseGrid").innerHTML = "";
+  }
   renderSubChips();
   document.getElementById("browseCount").textContent = "Searching archive.org...";
   var sortParam = browseSortParam();
+  /* Year sorts fetch a wider page: the client-side re-sort by
+     derived year only orders what was fetched, so a wider page
+     orders more of the catalog at once. */
+  var pageRows = (browseState.sort === "year-desc" || browseState.sort === "year-asc") ? 100 : 48;
   function done() {
     var rerun = browseSequencer.finish();
     if (rerun) runBrowse(rerun === "reset");
@@ -4211,7 +5066,7 @@ function runBrowse(reset) {
      matches nothing still ends. */
   function fetchPage(emptyPages) {
     searchArchive(browseQuery(), {
-      rows: 48,
+      rows: pageRows,
       start: browseState.start,
       sort: sortParam
     }).then(function (res) {
@@ -4241,7 +5096,7 @@ function runBrowse(reset) {
          shown count is what is actually on screen after them. */
       var countText = res.total + " titles match this search. Showing " + shown + " after your filters.";
       if (browseState.sort === "year-desc" || browseState.sort === "year-asc") {
-        countText += " Year order follows the Archive year field.";
+        countText += " Year order follows the release year.";
       }
       document.getElementById("browseCount").textContent = countText;
       document.getElementById("loadMoreBtn").style.display =
@@ -4269,6 +5124,58 @@ function runBrowse(reset) {
 /* ---------- Details sheet ---------- */
 
 var currentDetails = null;
+var currentDetailsAdult = false;
+
+/* Titles whose direct download already failed once this session:
+   the Archive's file servers do not send CORS headers (verified
+   2026-11-16: the archive.org redirect carries
+   Access-Control-Allow-Origin *, the datanode reply carries none),
+   so a fetch from this page is blocked and the new tab link is
+   the honest path. Remembered per session so a title that fell
+   back once opens in a new tab straight away next time. */
+var downloadFallbackById = {};
+
+/* Download the picked file. A real download first: fetch the file
+   as a blob and save it through an object URL. When the fetch is
+   blocked (cross-origin, offline), fall back to opening the file
+   in a new tab and say so on the button, instead of calling a new
+   tab a download. */
+function downloadTitleFile(item, dl, btnEl) {
+  var url = dl ? downloadUrl(item.id, dl.name) : detailsUrl(item.id);
+  if (!dl) {
+    window.open(url, "_blank");
+    toast("No video file found, opened the Archive page instead");
+    return;
+  }
+  if (downloadFallbackById[item.id]) {
+    window.open(url, "_blank");
+    toast("Opened the file in a new tab");
+    return;
+  }
+  if (btnEl) btnEl.textContent = "Downloading...";
+  toast("Downloading from archive.org");
+  fetch(url).then(function (res) {
+    if (!res.ok) throw new Error("Download failed");
+    return res.blob();
+  }).then(function (blob) {
+    var objUrl = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = objUrl;
+    a.download = dl.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    /* The browser needs the object URL until the download starts. */
+    setTimeout(function () { URL.revokeObjectURL(objUrl); }, 60000);
+    if (btnEl) btnEl.textContent = "Download (" + formatSize(dl.size) + ")";
+    toast("Download started");
+  }).catch(function () {
+    downloadFallbackById[item.id] = true;
+    if (btnEl) btnEl.textContent = "Open in new tab (" + formatSize(dl.size) + ")";
+    window.open(url, "_blank");
+    toast("Direct download is blocked, opened the file in a new tab instead");
+  });
+}
 
 /* opts.adultContext marks details opened from inside the 18+
    section, so More Like This may include adult titles. Callers
@@ -4276,6 +5183,7 @@ var currentDetails = null;
 function openDetails(item, opts) {
   var adultCtx = !!(opts && opts.adultContext);
   currentDetails = item;
+  currentDetailsAdult = adultCtx;
   var body = document.getElementById("detailsBody");
   body.innerHTML = "<p>Loading details from archive.org...</p>";
   document.getElementById("detailsSheet").hidden = false;
@@ -4309,16 +5217,25 @@ function openDetails(item, opts) {
     if (detYear == null) detYear = item.year;
     var year = detYear != null ? String(detYear) : "";
     var creator = toArray(m.creator)[0] ? String(toArray(m.creator)[0]) : item.creator;
-    var h = state.history[historyKey(item)];
+    /* A show's place lives on its episodes, not the show entry:
+       Play resumes the episode in progress, and the status line
+       shows that episode's place. */
+    var h = bestResumeEntry(item.id) || state.history[historyKey(item)];
     var progress = h ? h.progress : 0;
     var inList = inMyList(item.id);
     var reaction = reactionOf(item.id);
+    var rating = ratingOf(item.id);
+    var plays = watchCountFor(item.id);
     var badge = ratingBadge(item);
     var fullItem = {
       id: item.id, title: item.title, year: detYear, type: item.type,
       subjects: subjects.length ? subjects : (item.subjects || []),
       rating: item.rating, downloads: item.downloads
     };
+    /* Show-level Play opens the episode in progress when there is
+       one, so it resumes that episode at its saved place instead
+       of restarting the season file from 0:00. */
+    var playTarget = resolvePlayTarget(fullItem);
 
     /* Keep the stored entries honest: an adult title opened here
        gets flagged in My List and in history, so it only ever
@@ -4348,8 +5265,16 @@ function openDetails(item, opts) {
        can patch the year in place when OMDb or TMDB disagrees. */
     var metaParts = [year, typeLabel(item.type),
       creator ? "By " + creator : "", runtime,
-      badge, h ? "Watched " + h.watchCount + " time" + (h.watchCount === 1 ? "" : "s") : ""]
+      badge, rating ? "Your rating: " + rating + "/5" : "",
+      plays ? "Watched " + plays + " time" + (plays === 1 ? "" : "s") : ""]
       .filter(Boolean);
+
+    var starsHtml = [1, 2, 3, 4, 5].map(function (n) {
+      return '<button class="btn small star-btn" type="button" data-star="' + n +
+        '" aria-label="Rate ' + n + ' star' + (n === 1 ? "" : "s") + '"' +
+        ' aria-pressed="' + (rating === n ? "true" : "false") + '">' +
+        (n <= rating ? "★" : "☆") + "</button>";
+    }).join("");
 
     body.innerHTML =
       '<div class="details-top">' +
@@ -4364,12 +5289,15 @@ function openDetails(item, opts) {
       '<div class="details-actions">' +
       '<button class="btn btn-primary" id="dPlay">' +
       (progress >= 1 ? "Watch Again" : (progress > 0 ? "Resume" : "Play")) + "</button>" +
-      '<button class="btn" id="dDownload">Download' + (dl ? " (" + formatSize(dl.size) + ")" : "") + "</button>" +
+      '<button class="btn" id="dDownload">' +
+      (downloadFallbackById[item.id] ? "Open in new tab" : "Download") +
+      (dl ? " (" + formatSize(dl.size) + ")" : "") + "</button>" +
       '<button class="btn" id="dList">' + (inList ? "Remove from My List" : "Add to My List") + "</button>" +
       '<button class="btn" id="dLike">' + (reaction === 1 ? "Liked" : "Like") + "</button>" +
       '<button class="btn' + (reaction === -1 ? " dislike-active" : "") + '" id="dNope" ' +
       'aria-pressed="' + (reaction === -1 ? "true" : "false") + '">' +
       (reaction === -1 ? "Not for you, noted" : "Not for me") + "</button>" +
+      '<span class="rating-stars" id="dStars"><span class="rating-label">Your rating: </span>' + starsHtml + "</span>" +
       "</div>" +
       '<div class="place-row"><p class="sub">' + esc(placeText(h)) +
       " Your place is saved automatically as you watch.</p></div>" +
@@ -4388,11 +5316,9 @@ function openDetails(item, opts) {
       upgradePoster(detImg, item, "details");
       guardThumbnail(detImg, item, "details");
     }
-    document.getElementById("dPlay").addEventListener("click", function () { openPlayer(fullItem); });
+    document.getElementById("dPlay").addEventListener("click", function () { openPlayer(playTarget); });
     document.getElementById("dDownload").addEventListener("click", function () {
-      var url = dl ? downloadUrl(item.id, dl.name) : detailsUrl(item.id);
-      window.open(url, "_blank");
-      toast(dl ? "Download started from archive.org" : "No video file found, opened the Archive page instead");
+      downloadTitleFile(fullItem, dl, document.getElementById("dDownload"));
     });
     document.getElementById("dList").addEventListener("click", function () {
       toggleMyList(fullItem);
@@ -4406,7 +5332,14 @@ function openDetails(item, opts) {
       setReaction(fullItem, -1);
       openDetails(item, { adultContext: adultCtx });
     });
+    body.querySelectorAll("#dStars [data-star]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        setRating(fullItem, Number(b.dataset.star));
+        openDetails(item, { adultContext: adultCtx });
+      });
+    });
     wireExpandableDescs(body);
+    renderDetailsCredits(body, fullItem);
     wireRowArrows(body.querySelector(".row-viewport"));
     renderEpisodeSection(item, files, subjects);
 
@@ -4440,12 +5373,18 @@ function openDetails(item, opts) {
        from inside the 18+ section; the flag arrives with the
        caller, never read back from the DOM. */
     if (topSub) {
+      /* Skeleton cards at once: the row used to sit empty for
+         seconds while the search ran, looking broken. */
+      similarRow.innerHTML = '<div class="skeleton-row"><div class="skeleton-card"></div>' +
+        '<div class="skeleton-card"></div><div class="skeleton-card"></div></div>';
       searchArchive(typeQueryFor(item.type) + ' AND subject:"' + topSub.replace(/"/g, "") + '"',
         { rows: 20, sort: "downloads desc", type: item.type, allowAdult: adultCtx })
         .then(function (res) {
-          var sims = filterVisible(res.items).filter(function (it) {
-            return it.id !== item.id && reactionOf(it.id) !== -1;
-          }).slice(0, 12);
+          /* Ranked by shared subjects and era, never the seed
+             itself: a single shared subject used to let an
+             unrelated modern musical into this row. */
+          var sims = filterNotForMe(rankSimilar(fullItem, filterVisible(res.items)))
+            .slice(0, 12);
           if (!sims.length) {
             similarRow.innerHTML = '<p class="row-error">No close matches found.</p>';
             updateRowArrows(similarRow.closest(".row-viewport"));
@@ -4471,7 +5410,17 @@ function closeDetails() {
   document.getElementById("detailsSheet").hidden = true;
   document.body.style.overflow = "";
   currentDetails = null;
+  currentDetailsAdult = false;
   dialogClosed(dialogElFor("detailsSheet"));
+}
+
+/* After the player closes, the details sheet underneath still
+   shows the place from before playback. Re-render it when it is
+   open, so the resume position and progress are current. */
+function refreshOpenDetails() {
+  if (document.getElementById("detailsSheet").hidden) return;
+  if (!currentDetails) return;
+  openDetails(currentDetails, { adultContext: currentDetailsAdult });
 }
 
 /* ---------- Episodes in the details sheet ---------- */
@@ -4483,6 +5432,28 @@ function closeDetails() {
    Episodes heading with one line saying so, plus the Play button
    for the main file when one exists, instead of a silent dead end. */
 
+/* The player item for one episode: the show name (without a
+   trailing season marker or year), the episode label and the
+   episode's own title, plus the file and history key so the
+   episode plays and resumes on its own. Shared by the episode
+   row and the next-episode offer. */
+function episodePlayerItem(ep, showItem, showName) {
+  var name = displayShowName(showName || showItem.title);
+  var label = episodeLabel(ep);
+  var cleanTitle = stripShowName(ep.title || "", name);
+  return {
+    id: ep.itemId,
+    title: name + (label ? " " + label : "") + (cleanTitle ? ": " + cleanTitle : ""),
+    year: ep.year != null ? ep.year : showItem.year,
+    type: showItem.type || "show",
+    subjects: showItem.subjects || [],
+    rating: showItem.rating != null ? showItem.rating : null,
+    downloads: showItem.downloads != null ? showItem.downloads : 0,
+    file: ep.file || null,
+    historyId: ep.historyId || null
+  };
+}
+
 function episodeRowEl(ep, showItem, showName) {
   var btn = document.createElement("button");
   btn.className = "episode-row";
@@ -4490,7 +5461,13 @@ function episodeRowEl(ep, showItem, showName) {
   var h = episodeHistoryEntry({ id: ep.itemId, file: ep.file || null, historyId: ep.historyId || null });
   var prog = h ? h.progress : 0;
   var label = episodeLabel(ep);
-  var title = ep.title || label || "Untitled episode";
+  /* The row title is the episode's own title only. Rows built
+     when no show name was known still carry the show name (and
+     year) in front, so strip it here at render time as well. The
+     Play label is part of the row from the first render, never
+     added later. */
+  var rowName = displayShowName(showName || showItem.title);
+  var title = stripShowName(ep.title || "", rowName) || label || "Untitled episode";
   var meta = [];
   if (ep.length) meta.push(formatRuntime(ep.length));
   if (ep.year) meta.push(String(ep.year));
@@ -4504,16 +5481,7 @@ function episodeRowEl(ep, showItem, showName) {
     '<span class="episode-play">' + (prog >= 1 ? "Watch Again" : (prog > 0 ? "Resume" : "Play")) + "</span>";
   btn.setAttribute("aria-label", title + (label && ep.title ? " (" + label + ")" : ""));
   btn.addEventListener("click", function () {
-    var name = showName || showItem.title;
-    openPlayer({
-      id: ep.itemId,
-      title: name + (label ? " " + label : "") + (ep.title ? ": " + ep.title : ""),
-      year: ep.year != null ? ep.year : showItem.year,
-      type: showItem.type || "show",
-      subjects: showItem.subjects || [],
-      file: ep.file || null,
-      historyId: ep.historyId || null
-    });
+    openPlayer(episodePlayerItem(ep, showItem, showName));
   });
   return btn;
 }
@@ -4640,6 +5608,20 @@ var playerRecoveredAt = 0;
 var RECOVERY_MAX_ATTEMPTS = 3;
 var ERROR_RETRY_DELAY_MS = 1500;
 var recoveryBudget = makeRetryBudget(RECOVERY_MAX_ATTEMPTS);
+/* Play counting: one play counts once, when playback actually
+   starts, so the "Watched N times" counter moves on a play, not
+   only on a finish. playCountedToken guards against recovery
+   restarts counting again; playCountedKey stops recordProgress
+   counting the same viewing a second time when it finishes. The
+   token starts at -1, never 0: the player token starts at 0, and
+   0 would read as "already counted" before any play. */
+var playCountedToken = -1;
+var playCountedKey = null;
+/* Next episode: after an episode ends, the player offers the next
+   one with a short countdown instead of closing at once. */
+var NEXT_EPISODE_COUNTDOWN_SECONDS = 8;
+var nextEpisodeInterval = null;
+var nextEpisodePending = false;
 
 /* A stream dying mid-film makes the browser fire "ended" with the
    playhead far from the end. Only a playhead within a few seconds
@@ -4706,6 +5688,7 @@ function saveVideoPositionThrottled() {
 function updatePlayerPlace() {
   var el = document.getElementById("playerPlace");
   var h = currentPlayer && episodeHistoryEntry(currentPlayer);
+  syncFinishedChip();
   if (!h || h.progress <= 0) {
     el.textContent = "Not started yet.";
     return;
@@ -4723,14 +5706,64 @@ function updatePlayerPlace() {
   el.textContent = "Your place: " + Math.round(h.progress * 100) + "%. Saved automatically.";
 }
 
-/* Show the right note and controls for the player mode. The manual
-   percent buttons only ever appear in embed fallback mode. */
+/* Show the right note and controls for the player mode. The
+   manual percent buttons only ever appear in embed fallback mode,
+   where the Archive player cannot report a place. The Finished
+   chip stays in both modes, so a title can always be marked
+   finished by hand. Note styles.css gives .progress-btns
+   display:flex, which beats the [hidden] attribute, so the row
+   stayed visible in every mode: drive it with inline display
+   instead. */
 function setPlayerMode(mode) {
   playerMode = mode;
   document.getElementById("playerNoteVideo").hidden = mode !== "video";
   document.getElementById("playerNoteEmbed").hidden = mode !== "embed";
-  document.getElementById("playerManualBtns").hidden = mode !== "embed";
-  document.getElementById("playerRestartBtn").hidden = mode !== "video";
+  var manual = document.getElementById("playerManualBtns");
+  manual.hidden = mode === "loading";
+  manual.style.display = mode === "loading" ? "none" : "";
+  manual.querySelectorAll(".btn").forEach(function (b) {
+    var p = Number(b.dataset.progress);
+    b.style.display = (p >= 1 || mode === "embed") ? "" : "none";
+  });
+  /* The one "Start from the beginning" button works in both modes
+     (seek in video mode, clear the saved place in embed mode), so
+     it is never hidden. */
+  document.getElementById("playerRestartBtn").hidden = false;
+  syncFinishedChip();
+}
+
+/* The Finished chip is gold only when the playing title is
+   actually finished. The markup ships it as btn-primary, so a
+   fresh player showed a gold Finished chip at 0%. */
+function syncFinishedChip() {
+  var btn = document.querySelector('.progress-btns [data-progress="1"]');
+  if (!btn) return;
+  var h = currentPlayer && episodeHistoryEntry(currentPlayer);
+  var finished = !!(h && h.progress >= 1);
+  btn.classList.toggle("btn-primary", finished);
+  btn.classList.toggle("btn-ghost", !finished);
+  btn.setAttribute("aria-pressed", finished ? "true" : "false");
+}
+
+/* Marking a title finished by hand, from the Finished chip. Unlike
+   finishTitle, this never treats a mid-film playhead as a dropped
+   stream: the tap is explicit, so it finishes, toasts, and leaves
+   the player open. Watch Again picks the title up from progress 1. */
+function markTitleFinished(item) {
+  if (!item) return;
+  var dur = currentVideo && Number(currentVideo.duration)
+    ? Math.round(Number(currentVideo.duration)) : 0;
+  if (!dur) {
+    var prev = state.history[historyKey(item)];
+    dur = prev ? prev.duration || 0 : 0;
+  }
+  recordProgress(item, 1, 0, dur);
+  updatePlayerPlace();
+  syncFinishedChip();
+  refreshPersonalViews();
+  refreshHomePersonal();
+  refreshAdultPersonal();
+  toast("Marked as finished");
 }
 
 function openPlayer(item) {
@@ -4746,9 +5779,12 @@ function openPlayer(item) {
   playerSameFileRetried = false;
   playerRecoveredAt = 0;
   recoveryBudget.reset();
+  playCountedToken = 0;
+  playCountedKey = null;
+  clearNextEpisodeTimers();
+  clearPlayerTracks();
   clearTimeout(playerRecoveryTimer);
-  document.getElementById("playerTitle").textContent = item.title +
-    (item.year ? " (" + item.year + ")" : "");
+  document.getElementById("playerTitle").textContent = titleWithYear(item.title, item.year);
   document.getElementById("playerFrame").innerHTML =
     '<p class="player-loading">Finding a playable file on archive.org...</p>';
   document.getElementById("playerSheet").hidden = false;
@@ -4820,6 +5856,150 @@ function showPlayerError(item, message, retry) {
   setPlayerMode("loading");
 }
 
+/* Count one play, once, when playback actually starts. Recovery
+   restarts and error retries re-enter startNativePlayer for the
+   same open, so the per-open token guards the count; a failed
+   open that never reaches a player counts nothing. */
+function countPlayOnce(item) {
+  if (!item || playCountedToken === playerOpenToken) return;
+  playCountedToken = playerOpenToken;
+  var key = historyKey(item);
+  playCountedKey = key;
+  var prev = state.history[key];
+  if (prev) {
+    prev.watchCount = (prev.watchCount || 0) + 1;
+    prev.lastWatchedAt = Date.now();
+  } else {
+    state.history[key] = {
+      id: item.id,
+      historyId: key,
+      file: item.file || null,
+      title: item.title,
+      year: item.year,
+      type: item.type,
+      subjects: item.subjects || [],
+      adult: isAdultItem(item),
+      progress: 0,
+      position: 0,
+      duration: 0,
+      lastWatchedAt: Date.now(),
+      watchCount: 1
+    };
+  }
+  pruneHistory(state.history);
+  saveState();
+}
+
+/* The subtitle and audio tracks a playing file actually carries.
+   Most Archive files carry none, so the selector only exists
+   when there is something to pick. Pure over the video element's
+   track lists, so the node test can drive it with a fake video. */
+function collectMediaTracks(video) {
+  var subs = [];
+  var audios = [];
+  if (!video) return { subs: subs, audios: audios };
+  var tt = video.textTracks;
+  if (tt) {
+    for (var i = 0; i < tt.length; i++) {
+      var t = tt[i];
+      if (!t) continue;
+      if (t.kind === "subtitles" || t.kind === "captions") subs.push(t);
+    }
+  }
+  var at = video.audioTracks;
+  if (at) {
+    for (var j = 0; j < at.length; j++) {
+      if (at[j]) audios.push(at[j]);
+    }
+  }
+  return { subs: subs, audios: audios };
+}
+
+/* The track selector row, created once under the player frame. */
+function ensurePlayerTracksEl() {
+  var el = document.getElementById("playerTracks");
+  if (el) return el;
+  var frame = document.getElementById("playerFrame");
+  if (!frame || !frame.parentNode) return null;
+  el = document.createElement("div");
+  el.id = "playerTracks";
+  el.className = "player-tracks";
+  el.style.cssText = "display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;align-items:center;";
+  frame.parentNode.insertBefore(el, frame.nextSibling);
+  return el;
+}
+
+function clearPlayerTracks() {
+  if (typeof document === "undefined") return;
+  var el = document.getElementById("playerTracks");
+  if (el) { el.innerHTML = ""; el.hidden = true; }
+}
+
+/* The track selector under the player: a Subtitles picker when the
+   file carries subtitle tracks, an Audio picker when it carries
+   more than one audio track. Nothing at all when it carries
+   neither, which is most Archive files. */
+function renderPlayerTracks(video) {
+  var wrap = ensurePlayerTracksEl();
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  var found = collectMediaTracks(video);
+  if (!found.subs.length && found.audios.length < 2) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+  function trackLabel(t, i, kind) {
+    return t.label || t.language || (kind + " " + (i + 1));
+  }
+  if (found.subs.length) {
+    var subLabel = document.createElement("label");
+    subLabel.textContent = "Subtitles ";
+    var subSel = document.createElement("select");
+    subSel.setAttribute("aria-label", "Subtitles");
+    var off = document.createElement("option");
+    off.value = "-1";
+    off.textContent = "Off";
+    subSel.appendChild(off);
+    found.subs.forEach(function (t, i) {
+      var o = document.createElement("option");
+      o.value = String(i);
+      o.textContent = trackLabel(t, i, "Subtitle");
+      subSel.appendChild(o);
+    });
+    var showing = -1;
+    found.subs.forEach(function (t, i) { if (t.mode === "showing") showing = i; });
+    subSel.value = String(showing);
+    subSel.addEventListener("change", function () {
+      var want = Number(subSel.value);
+      found.subs.forEach(function (t, i) { t.mode = i === want ? "showing" : "disabled"; });
+    });
+    subLabel.appendChild(subSel);
+    wrap.appendChild(subLabel);
+  }
+  if (found.audios.length > 1) {
+    var auLabel = document.createElement("label");
+    auLabel.textContent = "Audio ";
+    var auSel = document.createElement("select");
+    auSel.setAttribute("aria-label", "Audio track");
+    found.audios.forEach(function (t, i) {
+      var o = document.createElement("option");
+      o.value = String(i);
+      o.textContent = trackLabel(t, i, "Audio");
+      auSel.appendChild(o);
+    });
+    var enabled = 0;
+    found.audios.forEach(function (t, i) { if (t.enabled) enabled = i; });
+    auSel.value = String(enabled);
+    auSel.addEventListener("change", function () {
+      var want = Number(auSel.value);
+      found.audios.forEach(function (t, i) { t.enabled = i === want; });
+    });
+    auLabel.appendChild(auSel);
+    wrap.appendChild(auLabel);
+  }
+}
+
 function startNativePlayer(item, file) {
   /* Stop any previous video before replacing it, so a failed
      stream stops downloading once its element is gone. */
@@ -4838,9 +6018,11 @@ function startNativePlayer(item, file) {
   frame.appendChild(video);
   currentVideo = video;
   setPlayerMode("video");
+  countPlayOnce(item);
   var resumed = false;
   video.addEventListener("loadedmetadata", function () {
     if (currentVideo !== video) return;
+    renderPlayerTracks(video);
     if (resumed) return;
     resumed = true;
     /* Read the saved place fresh: after a recovery the history
@@ -4861,7 +6043,7 @@ function startNativePlayer(item, file) {
        genuinely near the end finishes the title; anything else is
        a dropped stream to recover from. */
     if (!isGenuinelyFinished(video)) { recoverStream(item); return; }
-    finishTitle(item);
+    handlePlaybackEnded(item);
   });
   video.addEventListener("error", function () {
     if (currentVideo !== video) return;
@@ -4943,6 +6125,110 @@ function startEmbedPlayer(item) {
   frame.innerHTML =
     '<iframe src="' + embedUrl(item.id) + '" allowfullscreen allow="fullscreen"></iframe>';
   setPlayerMode("embed");
+  countPlayOnce(item);
+  /* The Archive embed reports no tracks of its own. */
+  clearPlayerTracks();
+}
+
+/* Stop a running next-episode countdown and take its overlay
+   away, for player close, a new open, or finishing outright. */
+function clearNextEpisodeTimers() {
+  clearInterval(nextEpisodeInterval);
+  nextEpisodeInterval = null;
+  nextEpisodePending = false;
+  if (typeof document === "undefined") return;
+  var overlay = document.getElementById("nextEpisodeOverlay");
+  if (overlay) overlay.remove();
+}
+
+/* An episode ended. When the show has a next episode in the same
+   upload, offer it with a short countdown instead of closing the
+   player. Anything else finishes the normal way. Per-episode
+   uploads (one Archive item per episode) have no next episode in
+   this upload, so they finish normally too. */
+function handlePlaybackEnded(item) {
+  if (finishHandled || nextEpisodePending) return;
+  if (!item || !item.file || !item.historyId ||
+      (item.type !== "show" && item.type !== "cartoon")) {
+    finishTitle(item);
+    return;
+  }
+  var token = playerOpenToken;
+  getMetadata(item.id).then(function (meta) {
+    if (token !== playerOpenToken || !currentPlayer || currentPlayer !== item) return;
+    if (finishHandled || nextEpisodePending) return;
+    var showName = displayShowName(deriveShowName(item, item.subjects));
+    var eps = episodesFromFiles(item.id, showName, meta.files || []);
+    var ref = parseEpisodeRef(item.title);
+    var next = findNextEpisode(eps, { file: item.file, season: ref.season, episode: ref.episode });
+    if (!next) { finishTitle(item); return; }
+    /* The finished episode is recorded now, so closing the player
+       during the countdown still leaves it finished. */
+    var dur = currentVideo && Number(currentVideo.duration)
+      ? Math.round(Number(currentVideo.duration)) : 0;
+    recordProgress(item, 1, 0, dur);
+    nextEpisodePending = true;
+    showNextEpisode(item, next, showName);
+  }).catch(function () {
+    if (token !== playerOpenToken || !currentPlayer || currentPlayer !== item) return;
+    if (finishHandled || nextEpisodePending) return;
+    finishTitle(item);
+  });
+}
+
+/* The next-episode offer: an overlay over the player frame with
+   the next episode, a countdown, and Play now / Cancel. Built
+   with inline styles: the stylesheet cannot change. */
+function showNextEpisode(item, next, showName) {
+  var frame = document.getElementById("playerFrame");
+  if (!frame) { finishTitle(item); return; }
+  nextEpisodePending = true;
+  var nextItem = episodePlayerItem(next, item, showName);
+  var label = episodeLabel(next);
+  frame.style.position = "relative";
+  var overlay = document.createElement("div");
+  overlay.id = "nextEpisodeOverlay";
+  overlay.style.cssText = "position:absolute;inset:0;background:rgba(0,0,0,0.88);color:#fff;" +
+    "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;" +
+    "text-align:center;padding:24px;z-index:5;";
+  var head = document.createElement("p");
+  head.textContent = "Up next";
+  var title = document.createElement("p");
+  title.textContent = (label ? label + ": " : "") + (next.title || "Next episode");
+  title.style.cssText = "font-weight:800;font-size:1.1rem;margin:0;";
+  var count = document.createElement("p");
+  var remaining = NEXT_EPISODE_COUNTDOWN_SECONDS;
+  function paint() { count.textContent = "Playing in " + remaining + " seconds"; }
+  paint();
+  var playBtn = document.createElement("button");
+  playBtn.className = "btn btn-primary";
+  playBtn.type = "button";
+  playBtn.textContent = "Play now";
+  var cancelBtn = document.createElement("button");
+  cancelBtn.className = "btn btn-ghost";
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  function go() {
+    clearNextEpisodeTimers();
+    openPlayer(nextItem);
+  }
+  function cancel() {
+    clearNextEpisodeTimers();
+    finishTitle(item);
+  }
+  playBtn.addEventListener("click", go);
+  cancelBtn.addEventListener("click", cancel);
+  overlay.appendChild(head);
+  overlay.appendChild(title);
+  overlay.appendChild(count);
+  overlay.appendChild(playBtn);
+  overlay.appendChild(cancelBtn);
+  frame.appendChild(overlay);
+  nextEpisodeInterval = setInterval(function () {
+    remaining--;
+    if (remaining <= 0) { go(); return; }
+    paint();
+  }, 1000);
 }
 
 /* The film ended. Mark it finished, stop everything, re-scan the
@@ -4953,7 +6239,8 @@ function finishTitle(item) {
      "ended" with the playhead far from the end, and finishing here
      would record progress 1 with position 0 and throw away the
      user's place. Recover the stream instead. Embed mode has no
-     video element, so its Finished button always finishes. */
+     video element, so the guard cannot apply there; the Finished
+     chip finishes by hand through markTitleFinished instead. */
   if (playerMode === "video" && currentVideo && !isGenuinelyFinished(currentVideo)) {
     recoverStream(item);
     return;
@@ -4973,16 +6260,22 @@ function finishTitle(item) {
   document.body.style.overflow = "";
   currentPlayer = null;
   playerMode = "";
+  playCountedKey = null;
+  playCountedToken = -1;
+  clearNextEpisodeTimers();
   dialogClosed(dialogElFor("playerSheet"));
   /* An update that arrived mid-film reloads now, and the fresh page
      loads the catalog itself, so there is no need to re-scan first. */
   if (reloadForUpdateIfPending()) return;
   refreshPersonalViews();
   rescanCatalog();
+  refreshOpenDetails();
 }
 
 function stopPlayback() {
   clearTimeout(playerRecoveryTimer);
+  clearNextEpisodeTimers();
+  clearPlayerTracks();
   if (currentVideo) {
     try { currentVideo.pause(); } catch (e) { /* already stopped */ }
     try { currentVideo.removeAttribute("src"); currentVideo.load(); } catch (e) { /* ignore */ }
@@ -4998,10 +6291,13 @@ function closePlayer() {
   document.body.style.overflow = "";
   currentPlayer = null;
   playerMode = "";
+  playCountedKey = null;
+  playCountedToken = -1;
   dialogClosed(dialogElFor("playerSheet"));
   refreshPersonalViews();
   refreshHomePersonal();
   refreshAdultPersonal();
+  refreshOpenDetails();
   reloadForUpdateIfPending();
 }
 
@@ -5027,6 +6323,7 @@ function historyEntries(adultOnly) {
 
 function renderMyList() {
   var grid = document.getElementById("myListGrid");
+  if (!grid) return;
   grid.innerHTML = "";
   var saved = myListItems(false);
   var items = filterVisible(saved);
@@ -5044,6 +6341,7 @@ function renderMyList() {
 
 function renderHistory() {
   var list = document.getElementById("historyList");
+  if (!list) return;
   list.innerHTML = "";
   /* Lazily backfill adult flags for pre-v1.4.0 entries, then
      re-render if any entry was newly flagged adult. Each entry is
@@ -5065,7 +6363,11 @@ function renderHistory() {
       function () { showView("browse"); }));
     return;
   }
-  entries.forEach(function (h) {
+  /* One row per show: a season-level play and an episode play of
+     the same show collapse into the row that resumes the right
+     episode. */
+  collapseHistoryEntries(entries).forEach(function (group) {
+    var h = group.entry;
     var item = { id: h.id, title: h.title, year: storedYear(h), type: h.type, subjects: h.subjects || [],
       file: h.file || null, historyId: h.historyId || null };
     var div = document.createElement("div");
@@ -5075,7 +6377,7 @@ function renderHistory() {
       '<img class="history-thumb" src="' + posterUrl(h.id) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'"></span>' +
       '<div class="history-main"><div class="card-title">' + esc(h.title) + "</div>" +
       '<div class="card-meta">' + esc([item.year ? String(item.year) : "", typeLabel(h.type),
-        formatDate(h.lastWatchedAt), h.watchCount ? "Watched " + h.watchCount + " time" + (h.watchCount === 1 ? "" : "s") : ""]
+        formatDate(h.lastWatchedAt), group.watchCount ? "Watched " + group.watchCount + " time" + (group.watchCount === 1 ? "" : "s") : ""]
         .filter(Boolean).join(" · ")) + "</div>" +
       '<div class="progress-track"><div class="progress-fill" style="width:' + Math.round(h.progress * 100) + '%"></div></div>' +
       '<div class="card-meta">' + esc(placeText(h).replace(/\.$/, "")) + "</div></div>" +
@@ -5086,7 +6388,7 @@ function renderHistory() {
     div.querySelector('[data-act="play"]').addEventListener("click", function () { openPlayer(item); });
     div.querySelector('[data-act="details"]').addEventListener("click", function () { openDetails(item); });
     div.querySelector('[data-act="remove"]').addEventListener("click", function () {
-      delete state.history[h.historyId || h.id];
+      group.keys.forEach(function (k) { delete state.history[k]; });
       saveState();
       renderHistory();
       toast("Removed from history");
@@ -5230,6 +6532,33 @@ function accentTextSafeFor(accentHex, surfaceHex) {
   return target;
 }
 
+/* A hex color typed or picked for the custom accent, normalized
+   to lowercase "#rrggbb", or null when it is not a 6-digit hex
+   color. Accepts the value with or without the leading "#".
+   Pure, so the node test can drive it. */
+function normalizeAccentHex(value) {
+  var v = String(value || "").trim().toLowerCase();
+  if (v.charAt(0) !== "#") v = "#" + v;
+  if (!hexToRgb(v)) return null;
+  return v;
+}
+
+/* Apply a custom accent from a swatch or the hex field: validate
+   it, persist it, re-theme, and confirm, so the user can see the
+   change took. Returns false (with a toast) for an invalid hex. */
+function setCustomAccent(hex) {
+  var clean = normalizeAccentHex(hex);
+  if (!clean) {
+    toast("That is not a valid color. Use hex like #f0b429.");
+    return false;
+  }
+  state.customAccent = clean;
+  saveState();
+  applyTheme();
+  toast("Accent color applied");
+  return true;
+}
+
 function applyTheme() {
   document.documentElement.setAttribute("data-theme", state.theme || "flix");
   if (state.customAccent) {
@@ -5260,8 +6589,12 @@ function applyTheme() {
   document.querySelectorAll(".theme-btn").forEach(function (b) {
     b.classList.toggle("active", b.dataset.theme === state.theme);
   });
-  var picker = document.getElementById("accentPicker");
-  if (picker && state.customAccent) picker.value = state.customAccent;
+  var hexInput = document.getElementById("accentHex");
+  if (hexInput) hexInput.value = state.customAccent || "";
+  document.querySelectorAll(".accent-swatch").forEach(function (b) {
+    b.classList.toggle("active", !!state.customAccent &&
+      String(b.dataset.accent || "").toLowerCase() === String(state.customAccent).toLowerCase());
+  });
 }
 
 /* ---------- Density ---------- */
@@ -5559,9 +6892,11 @@ function hidePinSheet() {
 
 function closePinSheet() {
   if (pinContext && !pinContext.allowCancel) return;
+  var onCancel = pinContext && pinContext.onCancel;
   hidePinSheet();
   pinContext = null;
   pinEntry = "";
+  if (onCancel) onCancel();
 }
 
 function pinSubmit(entered) {
@@ -5669,20 +7004,34 @@ function pinForgot() {
   if (!forgotArmed) {
     forgotArmed = true;
     btn.textContent = "Tap again to erase this profile's data and remove its lock";
+    btn.setAttribute("aria-pressed", "true");
+    btn.style.outline = "3px solid var(--accent)";
+    btn.style.outlineOffset = "2px";
     setTimeout(function () {
       forgotArmed = false;
       btn.textContent = "Forgot PIN?";
-    }, 5000);
+      btn.setAttribute("aria-pressed", "false");
+      btn.style.outline = "";
+      btn.style.outlineOffset = "";
+    }, DELETE_ARM_MS);
     return;
   }
   forgotArmed = false;
   btn.textContent = "Forgot PIN?";
+  btn.setAttribute("aria-pressed", "false");
+  btn.style.outline = "";
+  btn.style.outlineOffset = "";
   resetProfileData(p.id);
   hidePinSheet();
   pinContext = null;
   enterProfile(p.id);
   toast("Profile reset, its history and My List were erased");
 }
+
+/* Two-tap delete window: 10 seconds, so a slow second tap still
+   lands. The armed button also gets an accent outline and
+   aria-pressed, so the armed state is obvious, not just text. */
+var DELETE_ARM_MS = 10000;
 
 function renderProfileList() {
   var wrap = document.getElementById("profileList");
@@ -5761,7 +7110,16 @@ function renderProfileList() {
       if (!armed) {
         armed = true;
         delBtn.textContent = "Tap again to delete";
-        setTimeout(function () { armed = false; delBtn.textContent = "Delete"; }, 5000);
+        delBtn.setAttribute("aria-pressed", "true");
+        delBtn.style.outline = "3px solid var(--accent)";
+        delBtn.style.outlineOffset = "2px";
+        setTimeout(function () {
+          armed = false;
+          delBtn.textContent = "Delete";
+          delBtn.setAttribute("aria-pressed", "false");
+          delBtn.style.outline = "";
+          delBtn.style.outlineOffset = "";
+        }, DELETE_ARM_MS);
         return;
       }
       gated(function () {
@@ -5828,6 +7186,15 @@ function startProfileRename(row, p) {
 
 /* ---------- Navigation ---------- */
 
+/* The section ids in the markup: My List is "myListView", not
+   "mylistView", so name + "View" missed it and showView threw on
+   a null element, leaving every view inactive (a blank page) and
+   the nav unswitched. */
+var VIEW_IDS = { home: "homeView", browse: "browseView", mylist: "myListView",
+  history: "historyView", adult: "adultView", settings: "settingsView" };
+
+function viewIdFor(name) { return VIEW_IDS[name] || name + "View"; }
+
 function showView(name) {
   /* The 18+ section is gated here, the one choke point for entering
      a view: disabled profiles go Home, and a locked profile must
@@ -5854,7 +7221,8 @@ function showView(name) {
   }
   if (name !== "adult") adultUnlocked = false;
   document.querySelectorAll(".view").forEach(function (v) { v.classList.remove("active"); });
-  document.getElementById(name + "View").classList.add("active");
+  var viewEl = document.getElementById(viewIdFor(name));
+  if (viewEl) viewEl.classList.add("active");
   document.querySelectorAll(".navbtn").forEach(function (b) {
     b.classList.toggle("active", b.dataset.view === name);
   });
@@ -5971,7 +7339,7 @@ function loadAdult() {
     var load = function () {
       loadRow(def).then(function (result) {
         var items = result.items || result;
-        items = filterVisible(items).filter(function (it) { return reactionOf(it.id) !== -1; });
+        items = filterNotForMe(filterVisible(items));
         fillRow(section, items, "Nothing found here right now.", { adultContext: true });
       }).catch(function () {
         rowError(section, load);
@@ -6301,12 +7669,23 @@ function registerServiceWorker() {
   });
 }
 
+/* The "Install button above" help line follows the button: it
+   shows only while the button is showing, so the sentence never
+   sits above nothing when the browser offers no install prompt. */
+function syncInstallHelp() {
+  var note = document.getElementById("installHelpNote");
+  if (!note) return;
+  var btn = document.getElementById("installBtn");
+  note.hidden = !btn || btn.hidden;
+}
+
 function initInstallPrompt() {
   window.addEventListener("beforeinstallprompt", function (e) {
     e.preventDefault();
     deferredInstallPrompt = e;
     var btn = document.getElementById("installBtn");
     if (btn) btn.hidden = false;
+    syncInstallHelp();
   });
   var btn = document.getElementById("installBtn");
   if (btn) {
@@ -6316,16 +7695,17 @@ function initInstallPrompt() {
       deferredInstallPrompt.userChoice.then(function () {
         deferredInstallPrompt = null;
         btn.hidden = true;
+        syncInstallHelp();
       }).catch(function () { /* prompt dismissed */ });
     });
   }
+  syncInstallHelp();
 }
 
 /* ---------- Init ---------- */
 
 function syncHideWatchedBoxes() {
   document.getElementById("hideWatchedTop").checked = state.hideWatched;
-  document.getElementById("hideWatchedBrowse").checked = state.hideWatched;
 }
 
 function onHideWatchedChange(checked) {
@@ -6475,21 +7855,39 @@ function showImportConfirm(info, data) {
   });
 }
 
-/* Who is watching? More than one profile gets the picker. One
-   profile opens straight in, with a PIN prompt when it is locked.
-   Also the resume point after the damaged-data state. */
+/* The boot decision for the stored profiles: which profile, if
+   any, the app opens straight into on reload. Pure, so the node
+   test can drive it. The remembered profile is the stored
+   activeId (written by switchProfile on every entry and switch);
+   a stored id that no longer exists falls back to the first
+   profile, and no profiles at all means the picker. */
+function bootActionFor(profiles, activeId) {
+  var list = profiles || [];
+  var active = null;
+  list.forEach(function (p) { if (p.id === activeId) active = p; });
+  if (!active) active = list[0] || null;
+  if (!active) return { action: "picker", profileId: null };
+  if (isPinLocked(active)) return { action: "pin", profileId: active.id };
+  return { action: "enter", profileId: active.id };
+}
+
+/* Who is watching? The remembered profile opens straight in: the
+   active profile id is stored on every switch, so a reload goes
+   back into the same profile, with a PIN prompt when it is
+   locked. Cancelling that PIN prompt falls back to the picker,
+   and the avatar in the top bar always opens the picker to
+   switch. Also the resume point after the damaged-data state. */
 function bootProfiles() {
   updateProfileButton();
   updateAdultNav();
-  if (profilesStore.profiles.length > 1) {
-    openPicker(false);
+  var decision = bootActionFor(profilesStore.profiles, profilesStore.activeId);
+  if (decision.action === "pin") {
+    openPinSheet({ mode: "unlock", profileId: decision.profileId, allowCancel: true,
+      onCancel: function () { openPicker(false); } });
+  } else if (decision.action === "enter") {
+    enterProfile(decision.profileId);
   } else {
-    var only = profilesStore.profiles[0];
-    if (isPinLocked(only)) {
-      openPinSheet({ mode: "unlock", profileId: only.id, allowCancel: false });
-    } else {
-      enterProfile(only.id);
-    }
+    openPicker(false);
   }
 }
 
@@ -6550,9 +7948,6 @@ function init() {
   document.getElementById("settingsBtn").addEventListener("click", function () { showView("settings"); });
 
   document.getElementById("hideWatchedTop").addEventListener("change", function (e) {
-    onHideWatchedChange(e.target.checked);
-  });
-  document.getElementById("hideWatchedBrowse").addEventListener("change", function (e) {
     onHideWatchedChange(e.target.checked);
   });
 
@@ -6702,27 +8097,22 @@ function init() {
     if (!document.getElementById("playerSheet").hidden) closePlayer();
     else if (!document.getElementById("detailsSheet").hidden) closeDetails();
   });
-  /* Manual place buttons. They only show in embed fallback mode, where
-     the Archive player cannot report your place. Native playback
-     saves your place on its own. Embed mode has no restart button
-     in the markup (the video-mode "Start from the beginning"
-     button is hidden there), so a 0% button is added here first,
-     wired like the other manual percent buttons. */
-  var manualBtns = document.getElementById("playerManualBtns");
-  if (manualBtns && !manualBtns.querySelector('[data-progress="0"]')) {
-    var zeroBtn = document.createElement("button");
-    zeroBtn.className = "btn btn-ghost";
-    zeroBtn.setAttribute("data-progress", "0");
-    zeroBtn.textContent = "Start from the beginning";
-    manualBtns.insertBefore(zeroBtn, manualBtns.firstChild);
-  }
+  /* Manual place buttons. The percent buttons only show in embed
+     fallback mode, where the Archive player cannot report your
+     place; native playback saves your place on its own. The
+     Finished chip shows in both modes. There is deliberately no
+     0% button here: the one "Start from the beginning" button
+     below the frame works in both modes, and a second one in this
+     row was the duplicate. */
   document.querySelectorAll(".progress-btns .btn").forEach(function (b) {
     b.addEventListener("click", function () {
       if (!currentPlayer) return;
       var p = Number(b.dataset.progress);
-      /* Finished in embed mode goes through the same finish flow
-         as a film ending natively: mark finished, re-scan, Home. */
-      if (p >= 1) { finishTitle(currentPlayer); return; }
+      /* Finished by hand marks the title finished with a toast and
+         leaves the player open; it never goes through the
+         false-end guard, which would treat a mid-film tap as a
+         dropped stream. */
+      if (p >= 1) { markTitleFinished(currentPlayer); return; }
       /* A manual percent sets the position to the fraction of the
          duration when the duration is known, else it clears the
          position so the fraction is authoritative and no stale
@@ -6732,21 +8122,32 @@ function init() {
       if (dur > 0) recordProgress(currentPlayer, p, Math.round(p * dur), dur);
       else recordProgress(currentPlayer, p, 0);
       updatePlayerPlace();
+      syncFinishedChip();
       toast(p === 0 ? "Started from the beginning" : "Place saved at " + Math.round(p * 100) + "%");
     });
   });
   document.getElementById("playerRestartBtn").addEventListener("click", function () {
-    if (!currentVideo || !currentPlayer) return;
-    try { currentVideo.currentTime = 0; } catch (e) { /* seek failed */ }
-    recordProgress(currentPlayer, 0, 0, Number(currentVideo.duration) || 0);
+    if (!currentPlayer) return;
+    if (currentVideo) {
+      try { currentVideo.currentTime = 0; } catch (e) { /* seek failed */ }
+      recordProgress(currentPlayer, 0, 0, Number(currentVideo.duration) || 0);
+    } else {
+      /* Embed mode has no video element: just clear the saved place. */
+      var h = state.history[historyKey(currentPlayer)];
+      recordProgress(currentPlayer, 0, 0, h ? h.duration || 0 : 0);
+    }
     updatePlayerPlace();
     toast("Started from the beginning");
   });
 
-  document.getElementById("accentPicker").addEventListener("input", function (e) {
-    state.customAccent = e.target.value;
-    saveState();
-    applyTheme();
+  document.querySelectorAll(".accent-swatch").forEach(function (b) {
+    b.addEventListener("click", function () { setCustomAccent(b.dataset.accent); });
+  });
+  document.getElementById("accentApply").addEventListener("click", function () {
+    setCustomAccent(document.getElementById("accentHex").value);
+  });
+  document.getElementById("accentHex").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") setCustomAccent(e.target.value);
   });
   document.getElementById("accentClear").addEventListener("click", function () {
     state.customAccent = "";
@@ -7198,7 +8599,91 @@ if (typeof module !== "undefined" && module.exports) {
     testSetPosterCacheEntry: function (id, entry) { posterCache[id] = entry; },
     testClearPosterCache: function () { clearPosterCache(); },
     testClearYearLookupCache: function () { yearLookupCache = {}; },
-    testSaveState: function () { saveState(); }
+    testSaveState: function () { saveState(); },
+    /* v1.6.1 worker C: toasts, boot profile memory, install help,
+       custom accent. */
+    toast: toast,
+    hideToast: hideToast,
+    bootActionFor: bootActionFor,
+    syncInstallHelp: syncInstallHelp,
+    normalizeAccentHex: normalizeAccentHex,
+    setCustomAccent: setCustomAccent,
+    /* v1.6.1 worker A: My List, resume, player, history, ratings. */
+    viewIdFor: viewIdFor,
+    showView: showView,
+    renderMyList: renderMyList,
+    renderHistory: renderHistory,
+    bestResumeEntry: bestResumeEntry,
+    resolvePlayTarget: resolvePlayTarget,
+    watchCountFor: watchCountFor,
+    collapseHistoryEntries: collapseHistoryEntries,
+    displayShowName: displayShowName,
+    stripShowName: stripShowName,
+    episodePlayerItem: episodePlayerItem,
+    episodeRowEl: episodeRowEl,
+    findNextEpisode: findNextEpisode,
+    NEXT_EPISODE_COUNTDOWN_SECONDS: NEXT_EPISODE_COUNTDOWN_SECONDS,
+    DELETE_ARM_MS: DELETE_ARM_MS,
+    ratingOf: ratingOf,
+    setRating: setRating,
+    PROFILE_FIELDS: PROFILE_FIELDS,
+    markTitleFinished: markTitleFinished,
+    syncFinishedChip: syncFinishedChip,
+    setPlayerMode: setPlayerMode,
+    countPlayOnce: countPlayOnce,
+    downloadTitleFile: downloadTitleFile,
+    testDownloadFallback: function (id) { return !!downloadFallbackById[id]; },
+    collectMediaTracks: collectMediaTracks,
+    renderPlayerTracks: renderPlayerTracks,
+    clearPlayerTracks: clearPlayerTracks,
+    refreshOpenDetails: refreshOpenDetails,
+    openDetails: openDetails,
+    closeDetails: closeDetails,
+    openPlayer: openPlayer,
+    closePlayer: closePlayer,
+    finishTitle: finishTitle,
+    handlePlaybackEnded: handlePlaybackEnded,
+    showNextEpisode: showNextEpisode,
+    clearNextEpisodeTimers: clearNextEpisodeTimers,
+    testNextEpisodePending: function () { return nextEpisodePending; },
+    renderProfileList: renderProfileList,
+    /* v1.6.1 worker B: catalog, adult gate, dedupe, ratings,
+       titles, posters, recommendations, credits. */
+    cleanTitle: cleanTitle,
+    titleWithYear: titleWithYear,
+    cleanText: cleanText,
+    typeOf: typeOf,
+    titleMatchKey: titleMatchKey,
+    dedupeKey: dedupeKey,
+    dedupeItems: dedupeItems,
+    topRatedScore: topRatedScore,
+    topRatedSort: topRatedSort,
+    compareDerivedYear: compareDerivedYear,
+    ratingBadge: ratingBadge,
+    isAdultBlocked: isAdultBlocked,
+    ADULT_BLOCK_IDS: ADULT_BLOCK_IDS,
+    ADULT_BLOCK_TITLES: ADULT_BLOCK_TITLES,
+    isNotForMe: isNotForMe,
+    filterNotForMe: filterNotForMe,
+    sortClientSide: sortClientSide,
+    filterBrowseItems: filterBrowseItems,
+    sharedSignalCount: sharedSignalCount,
+    similarScore: similarScore,
+    rankSimilar: rankSimilar,
+    seedDedupeKeys: seedDedupeKeys,
+    omdbDetails: omdbDetails,
+    tmdbDetails: tmdbDetails,
+    pickTmdbMatch: pickTmdbMatch,
+    getTitleCredits: getTitleCredits,
+    creditsCacheValid: creditsCacheValid,
+    testClearCreditsCache: function () {
+      creditsCache = {};
+      storeRemove(CREDITS_CACHE_KEY);
+    },
+    testSetBrowseState: function (patch) {
+      Object.keys(patch || {}).forEach(function (k) { browseState[k] = patch[k]; });
+    },
+    testGetBrowseState: function () { return browseState; }
   };
 }
 

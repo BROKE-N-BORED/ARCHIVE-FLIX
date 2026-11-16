@@ -1,5 +1,133 @@
 # CHANGELOG
 
+## v1.6.1 - 2026-11-16
+
+Fix-everything build from the 2026-11-16 live QA pass (20 errors, UI
+problems, gaps) plus a phone-width pass at 390px that the QA round could
+not do. 431 node checks pass across the v1.6.1 suites.
+
+My List and profiles (errors 1-2, 12): My List renders again. The view
+lookup built the wrong section id ("mylistView" instead of "myListView"),
+so the page went blank and the nav never switched; the lookup now uses
+an explicit map with a null guard. The PIN dialog opens above the
+profile picker instead of behind it. The two-tap delete confirm window
+is 10 seconds instead of 5, with an outline and aria-pressed while
+armed; the Forgot-PIN confirm gets the same window. The active profile
+is remembered across reloads (a locked profile still asks for its PIN
+first). How to Use now says "Tap your avatar in the top bar to switch
+profiles", and the picker's Back button sits under the heading.
+
+Playback and resume (errors 3-4, 6-7, 9, 19): show-level Play resumes
+the in-progress episode instead of restarting the season file. The
+Finished chip only highlights gold when the title is actually finished,
+and tapping it marks the title finished without closing the player
+(Watch Again picks it up). The duplicate "Start from the beginning"
+button is gone; the one restart button works in both modes. The
+"Watched N times" counter counts a play when playback actually starts,
+once per viewing, and sums across a show's episodes. Closing the player
+refreshes the open details sheet, so it shows the new resume position
+instead of "Not started yet". History collapses a show's season-level
+and episode plays into one row, resuming the in-progress episode.
+Next-episode autoplay: when an episode in a multi-file upload ends, an
+overlay offers the next episode with an 8-second countdown (Play now /
+Cancel). There is no "Skip intro": the Archive carries no intro
+timestamps, so nothing is faked.
+
+Downloads (error 8): the Download button attempts a real file download
+(fetch to a blob, then a download link) and falls back to opening the
+file in a new tab, relabeled "Open in new tab", when the browser blocks
+the cross-origin fetch. In practice the Archive's file servers do not
+send the CORS headers a browser fetch needs, so the new-tab fallback is
+the path users will see; the button says so honestly instead of
+promising a download it cannot do.
+
+Catalog, adult isolation, dedupe (errors 14-16): four adult titles that
+leaked into normal browsing ("In The Realm Of The Senses", "Real Sex",
+"Diary of a Nudist", "Child Bride") were untagged, so no subject filter
+could catch them; they are now blocked by identifier and by title
+(catching future re-uploads), the adult pool covers all three catalog
+collections, and ungated results are never cached. Duplicate catalog
+entries collapse by normalized title + year, keeping the most
+downloaded upload. Top Rated / Top IMDb / "rated" sorts now rank by a
+review-weighted score instead of the raw average, so a 5.0 from one
+review no longer outranks a 4.6 from fifty; unrated items show "No
+rating" instead of 0.0. Saved snapshots now carry the rating and
+downloads, so My List, Continue Watching, Watch Again, and History
+cards show the real badge instead of "No rating" for every saved or
+watched title (titles saved before this fix show "No rating" until
+re-saved or re-watched).
+
+Search, sort, recommendations (errors 5, 10-11, 17): "Not for me" now
+hides the title from home rows, adult rows, Browse, Because rows, More
+Like This, and Continue Watching / Watch Again immediately (My List is
+untouched: it holds the user's explicit saves). "Year, newest first"
+now sorts by the derived release year client-side on every page,
+unknowns last. More Like This shows skeleton cards while it loads. Home
+eagerly loads six rows instead of three and prefetches further ahead,
+so rows stop painting empty. Recommendations rank by shared subjects,
+type, and era, never return the seed title itself, and Because rows
+keep the seed's real casing.
+
+Titles, posters, labels: titles are cleaned of junk parentheticals and
+tails, duplicate years collapse to one, and decorative Unicode
+(fraktur, skulls) is normalized away; Archive collections no longer
+appear as titles in Browse. Hero descriptions no longer start with a
+pasted URL. Poster matching now requires every significant title word
+(or the full phrase) in the Commons filename, and TMDB no longer takes
+a zero-score first result, so the wrong posters the QA pass found (a
+COVID poster for The General, Goliath-and-the-Dragon for David and
+Goliath) no longer resolve; the poster cache version bumped so cached
+wrong posters re-resolve. Type labels fixed: season/episode titles and
+TV subjects now read Show, and cartoon subjects lose to episode and
+drive-in markers. Episode titles lose the show name and year in front
+("The Twilight Zone 1959 The Chaser" is now "The Chaser"); show names
+are found even when the title carries a leading "The" the subject
+lacks. The player title and card labels no longer repeat the year
+("(1915) (1915)").
+
+Details: cast/crew and maturity ratings appear when an OMDb or TMDB key
+is saved (Director/Actors/Rated from OMDb, credits + US certification
+from TMDB), cached like posters; without a key the section stays
+hidden. Star ratings (1-5) sit beside Like / Not for me, per profile,
+tap-again clears. Subtitles and audio pickers appear in the player only
+when the file actually exposes tracks; most Archive files expose none,
+so the selectors usually stay hidden, as intended.
+
+Layout and chrome: row arrows sit in the gutters instead of floating
+over edge cards, and the native scrollbar track under each row is
+hidden. Rating pills sit on their own line with a gap, consistently
+placed, and cards with no year or rating show no empty meta. Toasts
+dock above the footer, replace instead of stacking, and last 5s (7s for
+actions). The hero scrim is deeper so titles stay readable over bright
+frames, and dialog posters use contain so faces and poster text are not
+cropped. The custom accent picker is now 8 preset swatches plus a hex
+field (the native color popover is gone); every preset passes 4.5:1 for
+button text. The duplicate Hide-watched checkbox in Browse is gone; the
+top-bar one remains. History progress bars are thicker with a visible
+minimum fill. The footer attribution and Browse caption wrap instead of
+clipping mid-word. The Install help text follows the Install button
+(manual Android/iPhone steps always visible).
+
+Phone width (390px pass): the Hide-watched label stays visible in the
+top bar (room from a smaller wordmark, tighter gaps, and a gear-icon
+Settings button); the profile button is a full 44px; star buttons are
+44px wide; the row Retry button centers instead of stretching to card
+height; the fallback hero shrinks to its content instead of holding a
+tall empty slab; History rows wrap so the buttons drop below the text
+instead of squeezing the meta into a one-word-per-line column. Accent swatches stay 36px: shrinking them to fit one
+row would make the targets smaller to fix a cosmetic wrap. No
+horizontal overflow on any audited screen.
+
+Not fixed / honest limits: error 20 (a stream dropping once and
+recovering) is evidence the recovery path works, not a defect.
+Cast/crew and maturity ratings could not be verified against the live
+OMDb/TMDB APIs (no keys provided); the data path is tested with
+stubbed responses. "Skip intro" is not feasible (no intro timestamps
+in Archive data). The item's-own-files poster layer cannot be
+title-guarded, so a wrong poster shipped inside an upload itself cannot
+be caught by matching. Video-frame thumbnails (the real blank/credits
+fix, decision D1) still need Joshua's call.
+
 ## v1.6.0 - 2026-11-15
 
 Full review build: 91 of the 95 tasks from the 2026-11-15 review task list

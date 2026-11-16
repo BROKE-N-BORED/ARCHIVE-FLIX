@@ -269,7 +269,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 .browse-head h1 { margin-top: 24px; }
 .sub { color: var(--muted); margin: 4px 0 16px; max-width: 720px; }
 .section-title { font-size: 1.2rem; font-weight: 800; margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 2px solid var(--line); }
-.source-note { color: var(--muted); font-size: 0.85rem; margin: 36px 0 8px; }
+.source-note { color: var(--muted); font-size: 0.85rem; margin: 36px 0 8px; white-space: normal; overflow: visible; overflow-wrap: break-word; text-overflow: clip; max-width: 100%; }
 
 /* Home view goes full width so the hero bleeds edge to edge;
    the rows and the note stay in the centered column. */
@@ -284,7 +284,13 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   margin: 0;
   border-radius: 0;
   overflow: hidden;
-  background: var(--bg2);
+  /* The no-art gradient is the base, not plain bg2, so a hero whose
+     backdrop was rejected or failed to load still reads as a
+     designed title treatment instead of a flat slab. */
+  background:
+    linear-gradient(140deg,
+      color-mix(in srgb, var(--accent) 30%, var(--bg2)),
+      var(--bg2) 60%);
   min-height: min(80vh, 640px);
   position: relative;
   display: flex;
@@ -304,14 +310,19 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   inset: 0;
   z-index: 1;
   pointer-events: none;
+  /* Deepened scrim: the bottom fade reaches further up and the
+     left veil is heavier, so the title and text stay legible over
+     any backdrop, including a bright blurry credits frame. */
   background:
     linear-gradient(to top,
       var(--bg) 0%,
-      color-mix(in srgb, var(--bg) 62%, transparent) 32%,
-      transparent 62%),
+      color-mix(in srgb, var(--bg) 82%, transparent) 38%,
+      color-mix(in srgb, var(--bg) 32%, transparent) 58%,
+      transparent 74%),
     linear-gradient(to right,
-      color-mix(in srgb, var(--bg) 55%, transparent) 0%,
-      transparent 55%);
+      color-mix(in srgb, var(--bg) 72%, transparent) 0%,
+      color-mix(in srgb, var(--bg) 35%, transparent) 45%,
+      transparent 65%);
 }
 .hero-content {
   position: relative;
@@ -319,6 +330,12 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   padding: 32px 40px 72px;
   max-width: 760px;
 }
+/* The fallback hero (catalog failed, no backdrop) shrinks to its
+   content instead of holding the full hero height as an empty slab.
+   Doubled class beats the .hero min-height rules, including the
+   phone media query's. */
+.hero.hero-fallback { min-height: 0; }
+.hero.hero-fallback .hero-content { padding-bottom: 32px; }
 .hero-kicker {
   color: var(--accent-text-safe, var(--accent));
   font-weight: 800;
@@ -333,7 +350,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   font-weight: 900;
   line-height: 1.05;
   letter-spacing: -0.02em;
-  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.45);
+  text-shadow: 0 2px 20px rgba(0, 0, 0, 0.65), 0 1px 4px rgba(0, 0, 0, 0.6);
 }
 .hero-meta { color: var(--muted); margin: 0 0 10px; font-weight: 600; }
 .hero-desc {
@@ -346,7 +363,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
    read over a bright patch of artwork; the title keeps its own deeper one. */
 .hero-kicker,
 .hero-meta,
-.hero-desc { text-shadow: 0 1px 10px rgba(0, 0, 0, 0.55); }
+.hero-desc { text-shadow: 0 1px 12px rgba(0, 0, 0, 0.7), 0 1px 3px rgba(0, 0, 0, 0.6); }
 .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
 .hero-actions .btn {
   min-height: 48px;
@@ -395,14 +412,18 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   inset: 0;
   z-index: 1;
   pointer-events: none;
+  /* Same deepened scrim as .hero::after, so the skeleton matches
+     the real hero. */
   background:
     linear-gradient(to top,
       var(--bg) 0%,
-      color-mix(in srgb, var(--bg) 62%, transparent) 32%,
-      transparent 62%),
+      color-mix(in srgb, var(--bg) 82%, transparent) 38%,
+      color-mix(in srgb, var(--bg) 32%, transparent) 58%,
+      transparent 74%),
     linear-gradient(to right,
-      color-mix(in srgb, var(--bg) 55%, transparent) 0%,
-      transparent 55%);
+      color-mix(in srgb, var(--bg) 72%, transparent) 0%,
+      color-mix(in srgb, var(--bg) 35%, transparent) 45%,
+      transparent 65%);
 }
 .hero-skeleton-content {
   position: relative;
@@ -497,18 +518,22 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   gap: 16px;
   overflow-x: auto;
   padding: 16px 4px 20px;
-  scrollbar-width: thin;
+  /* No visible scrollbar track: swipe, wheel and arrow scrolling
+     still work, but the native track underneath every row is gone. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   scroll-snap-type: x proximity;
 }
-.row-scroll::-webkit-scrollbar { height: 8px; }
-.row-scroll::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 4px; }
+.row-scroll::-webkit-scrollbar { display: none; }
 
-/* Carousel arrows: translucent chevrons pinned to the row edges.
-   They fade in on hover on a computer, and briefly whenever the
+/* Carousel arrows: translucent chevrons in the row gutters.
+   The viewport reserves a 48px gutter on each side and the arrows
+   sit in it, so they never cover the first or last poster. They
+   fade in on hover on a computer, and briefly whenever the
    row is scrolled or touched on a phone (JS adds .arrows-shown).
    Disabled arrows stay invisible, so a row that fits, or an end
    already reached, shows nothing. */
-.row-viewport { position: relative; }
+.row-viewport { position: relative; padding: 0 48px; }
 .row-arrow {
   position: absolute;
   top: 50%;
@@ -532,8 +557,8 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   pointer-events: none;
   transition: opacity 0.15s, background-color 0.15s;
 }
-.row-arrow-left { left: 2px; }
-.row-arrow-right { right: 2px; }
+.row-arrow-left { left: 0; }
+.row-arrow-right { right: 0; }
 .row-arrow:hover { background: rgba(0, 0, 0, 0.78); }
 @media (hover: hover) {
   .row-viewport:hover .row-arrow:not([disabled]) { opacity: 1; pointer-events: auto; }
@@ -663,10 +688,15 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   overflow: hidden;
   min-height: 2.4em;
 }
-.card-meta { color: var(--muted); font-size: 0.84rem; margin-top: 4px; }
+/* The meta line is always its own line, and the badges sit on the
+   line below it, so the rating pill has one consistent placement
+   on every card. An empty meta line renders nothing. */
+.card-meta { display: block; color: var(--muted); font-size: 0.84rem; margin-top: 4px; }
+.card-meta:empty { display: none; }
 .card-badge {
   display: inline-block;
   margin-top: 7px;
+  margin-right: 6px;
   font-size: 0.7rem;
   font-weight: 800;
   text-transform: uppercase;
@@ -762,7 +792,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   letter-spacing: normal;
   text-transform: none;
 }
-.filter-row-end { align-items: center; justify-content: space-between; }
+.filter-row-end { align-items: center; justify-content: flex-end; }
 
 /* "More filters" collapsible: the extra filter rows stay hidden until
    the section is open, via .open on the container, .open on the
@@ -812,7 +842,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   content: "✓ ";
   font-weight: 800;
 }
-.browse-count { color: var(--muted); margin: 18px 0 0; font-size: 0.95rem; }
+.browse-count { color: var(--muted); margin: 18px 0 0; font-size: 0.95rem; white-space: normal; overflow: visible; overflow-wrap: break-word; text-overflow: clip; max-width: 100%; }
 
 /* History */
 .history-actions { margin: 8px 0 16px; }
@@ -833,6 +863,12 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 .history-thumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 8px; }
 .history-main { flex: 1; min-width: 0; }
 .history-main .card-title { min-height: 0; }
+/* History progress is a thick track with a minimum visible fill,
+   so a 1 to 3 percent watch still reads as a gold segment instead
+   of a tiny dash. A 0 percent fill stays empty. */
+.history-main .progress-track { height: 10px; border-radius: 5px; margin-top: 10px; }
+.history-main .progress-fill { min-width: 12px; border-radius: 5px; }
+.history-main .progress-fill[style="width:0%"] { min-width: 0; }
 .history-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* Settings */
@@ -867,7 +903,46 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   border-radius: 12px;
   padding: 14px 16px;
 }
-.accent-row input[type="color"] { width: 48px; height: 44px; padding: 2px; background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; }
+.accent-row input[type="text"] {
+  width: 110px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-height: 44px;
+}
+.accent-row input[type="text"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-text-safe, var(--accent)) 25%, transparent);
+  outline: none;
+}
+/* Preset accent swatches: plain buttons, no native color-picker
+   popover, so nothing here can cover the Density or Profiles
+   headings below. The active swatch gets the accent ring. */
+.accent-swatches { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.accent-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  padding: 0;
+  min-height: 0;
+  flex-shrink: 0;
+  transition: transform 0.12s, border-color 0.15s, box-shadow 0.15s;
+}
+.accent-swatch:hover { transform: scale(1.1); }
+.accent-swatch.active {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--bg2), 0 0 0 4px var(--accent-text-safe, var(--accent));
+}
+.accent-hex-label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
 .key-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .key-row input[type="password"] {
   flex: 1 1 220px;
@@ -907,6 +982,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   border-radius: 999px;
   padding: 5px 14px 5px 5px;
   min-height: 44px;
+  min-width: 44px;
   font-weight: 700;
   transition: border-color 0.15s;
 }
@@ -935,6 +1011,9 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 }
 .picker-backdrop[hidden] { display: none; }
 .picker { max-width: 640px; width: 100%; text-align: center; position: relative; }
+/* The picker's Back button sits under the heading, centered with
+   the content, not stranded at the top-right corner. */
+.picker .sheet-close { position: static; display: block; margin: 4px auto 16px; }
 .picker h2 { font-size: clamp(1.6rem, 5vw, 2.2rem); font-weight: 900; margin: 0 0 8px; }
 .picker .sub { margin: 0 auto 28px; }
 .profile-tiles { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; margin-bottom: 24px; }
@@ -988,7 +1067,13 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 /* The focus ring for this input lives in the shared focus rule above. */
 
 /* PIN pad */
-.pin-backdrop { z-index: 58; }
+/* The PIN dialog must always sit above the profile picker (55) and
+   every other sheet (50). This selector combines both classes on
+   purpose: a bare .pin-backdrop rule lost to the later
+   .sheet-backdrop rule at equal specificity, which put the PIN
+   dialog behind the picker with unclickable buttons. It also sits
+   above toasts (60), so a toast can never cover the PIN text. */
+.sheet-backdrop.pin-backdrop { z-index: 70; }
 .pin-sheet { max-width: 380px; text-align: center; }
 /* Heading clearance is em-based, so the Cancel button still fits at 200% text. */
 .pin-sheet h2 { margin: 0 4.5em 8px 0; font-size: 1.4rem; font-weight: 800; }
@@ -1093,8 +1178,10 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   z-index: 2;
 }
 .details-top { display: flex; gap: 28px; flex-wrap: wrap; }
-.details-poster-wrap { position: relative; width: 200px; aspect-ratio: 2 / 3; flex-shrink: 0; border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
-.details-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 10px; }
+.details-poster-wrap { position: relative; width: 200px; aspect-ratio: 2 / 3; flex-shrink: 0; border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); background: var(--bg3); }
+/* Contain, not cover: the full poster shows, letterboxed on the
+   frame background, instead of center-cropping faces and text. */
+.details-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 10px; background: var(--bg3); }
 .details-info { flex: 1 1 260px; min-width: 0; }
 .details-info h2 { margin: 0 28px 8px 0; font-size: clamp(1.4rem, 4vw, 1.8rem); font-weight: 800; line-height: 1.2; }
 .details-meta { color: var(--muted); margin: 0 0 12px; font-weight: 600; }
@@ -1184,10 +1271,15 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 .player-place { color: var(--muted); margin: 12px 0 0; font-weight: 600; }
 
 /* Toast */
+/* Docked bottom center, raised above the footer note so it never
+   sits on the footer, and below the PIN dialog (70) so it can
+   never cover the PIN text. Clicks pass through the toast body;
+   only its action button (Undo) takes them, so it never blocks
+   an interactive element underneath. */
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 24px;
+  bottom: 88px;
   transform: translateX(-50%);
   background: var(--bg3);
   color: var(--text);
@@ -1200,7 +1292,9 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   z-index: 60;
   max-width: calc(100vw - 32px);
   text-align: center;
+  pointer-events: none;
 }
+.toast .btn { pointer-events: auto; }
 
 /* Skeleton + error */
 /* Skeleton cards use the real card shell (same width, border and
@@ -1244,6 +1338,11 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   border: 1px solid var(--line);
   border-radius: 12px;
 }
+/* A row's Retry button sits beside the error card; without this the
+   flex row stretches it to full card height. */
+.row-scroll > .btn { align-self: center; }
+/* Star rating buttons: 44px wide so they are a full tap target. */
+.star-btn { min-width: 44px; }
 
 /* Density: Compact shrinks cards and gaps only. Text sizes and hit
    areas stay identical to Comfortable, which is the default. */
@@ -1256,8 +1355,27 @@ html[data-density="compact"] .card-body { padding: 10px 12px 12px; }
 
 @media (max-width: 640px) {
   .view { padding: 0 16px 48px; }
-  .topbar-inner { gap: 8px 12px; padding: 10px 14px; }
-  .wordmark { font-size: 1.3rem; }
+  .topbar-inner { gap: 8px 12px; padding: 10px 12px; flex-wrap: wrap; }
+  .wordmark { font-size: 1.05rem; }
+  /* Phone top bar: the "Hide watched" label stays visible. A bare
+     checkbox with no label is a mystery control. Room comes from
+     the smaller wordmark, tighter gaps, and the Settings button
+     becoming a gear icon (its aria-label still says Settings). */
+  .topbar-right { gap: 8px; }
+  .topbar .hidewatched { font-size: 0.8rem; }
+  .topbar-right .iconbtn {
+    width: 44px;
+    padding: 10px 0;
+    font-size: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .topbar-right .iconbtn::before {
+    content: "\2699";
+    font-size: 1.4rem;
+    line-height: 1;
+  }
   .mainnav {
     order: 3;
     flex-basis: 100%;
@@ -1269,19 +1387,8 @@ html[data-density="compact"] .card-body { padding: 10px 12px 12px; }
   .mainnav::-webkit-scrollbar { display: none; }
   .navbtn { flex-shrink: 0; }
   .ptr-indicator { top: var(--ptr-top, 112px); }
-  /* Phone top bar: hide the "Hide watched" label text but keep the
-     checkbox and its accessible label (the span stays in the
-     accessibility tree; it is only clipped visually). */
-  .topbar .hidewatched span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
   .card { flex-basis: 152px; }
+  .row-viewport { padding: 0 40px; }
   .row-arrow { width: 36px; }
   .skeleton-card { flex-basis: 152px; height: 318px; }
   html[data-density="compact"] .card { flex-basis: 136px; }
@@ -1302,6 +1409,12 @@ html[data-density="compact"] .card-body { padding: 10px 12px 12px; }
   .sheet { padding: 18px 16px; }
   .profile-btn #profileName { display: none; }
   .profile-btn { padding: 5px; }
+  /* History rows: the buttons drop below the text at phone width,
+     or they squeeze the meta into a one-word-per-line column and
+     crowd it. The 74px indent (60px thumb + 14px gap) lines the
+     buttons up with the text column. */
+  .history-item { flex-wrap: wrap; }
+  .history-btns { flex-basis: 100%; margin-left: 74px; }
   .profile-tile { width: 88px; }
   .profile-tile-avatar { width: 72px; height: 72px; font-size: 2rem; }
   .pin-key { width: 64px; height: 64px; }
