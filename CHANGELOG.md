@@ -1,5 +1,228 @@
 # CHANGELOG
 
+## v1.6.2 - 2026-11-17
+
+Fix-everything build from the 2026-11-17 live QA round 2 (desktop plus
+phone), which re-verified the round-1 fixes and found what still failed
+plus new issues. This release also includes everything from v1.6.1,
+which never got a Release of its own. 385 node checks pass across the
+v1.6.2 suites, plus 14 shell tests (128 checks) for the updater and 46
+live archive.org checks.
+
+Finished state and Watch Again (Desktop 4, Phone R2-7): fixed the root
+cause of the contradictory Finished state: a position save (pause,
+close, playback tick) used to overwrite a finished entry with the stale
+mid-film playhead, so a finished title slid back into Continue Watching
+with a resume position, History showed "Resume from" instead of
+Finished, and the Watch Again row stayed empty. Position saves now
+never un-finish a title: one finished during the current open keeps its
+finished state, one opened finished only counts as in progress again
+once a few real seconds have played, and a save at 0 seconds never
+wipes a saved place. An explicit restart or manual percent re-opens
+position saving. The Watch Again row on Home now appears as soon as
+anything is finished (it already existed in code but could never fill
+while finished entries kept reverting); finished titles leave Continue
+Watching. Details status is consistent with the player and History: a
+finished title says just "Finished.", a show says "N episodes finished."
+when some episodes are finished and none is in progress, and a show
+reads Finished (with a Watch Again button) only when every episode in
+its own upload is finished. Finishing one episode marks only that
+episode. The Finished button now ships as a ghost button like the
+25/50/75% buttons and only turns gold once the title is actually
+finished.
+
+Next episode (Desktop 20): new per-profile "Play the next episode
+automatically" setting in Settings, under Playback. Default is ON, the
+Netflix-like choice; profiles saved before the setting existed migrate
+to on. The end-of-episode offer respects the setting: with auto-advance
+off there is no countdown and nothing starts without a tap (the offer
+still shows Play now and Cancel, and says auto-advance is off). New
+Next episode button in the player (shows only for an episode that has a
+next one in the same upload; it saves the current episode's place
+first) and in show details (plays the episode after the one last
+watched; hidden when nothing was watched or on the last episode).
+
+Player (Phone R2-2, R2-8): the Back/Retry button in the player error
+state now renders in an actions row below the video frame instead of
+inside the fixed 16:9 frame, where overflow clipping cut it to its top
+half. Episode 0 now displays as "Pilot" everywhere (episode rows,
+player title, next-episode offer), never "S1 E0", and no episode number
+is invented for it. The player title keeps the show name verbatim:
+"The Twilight Zone Pilot: Original Pilot" instead of "Twilight Zone
+S1 E0: Original Pilot".
+
+Two-tap confirms (Desktop 12): the profile-delete confirm and the
+Forgot-PIN confirm no longer expire on a timer at all: the armed state
+stays until the second tap, until another profile's delete is armed,
+until Escape disarms it, or (for Forgot PIN) until the PIN sheet
+closes. This replaces the 10-second window (DELETE_ARM_MS is gone).
+
+Dedupe (Desktop 15): same normalized title AND years within 7 years
+collapse to one entry, anchored on the best upload (most downloads,
+then best rating); years far apart stay separate, so remakes survive.
+An upload with no year at all joins the title's main entry. The window
+is 7 because uploaders mislabel years by that much: Horror Express
+uploads carry 1972, 1973 and 1976; one Nosferatu upload carries 1929
+for the 1922 film. The tightest same-title remake gap in the catalog
+era is 9 years (The Front Page 1931 vs 1940; The Maltese Falcon 1931
+vs 1941), so 7 keeps every remake apart, and anchor clustering (not
+chaining) means a run of mislabeled years can never bridge two remakes.
+Live result: Horror Express 11 uploads in feature_films collapse to
+one card; Night of the Living Dead 15 uploads to one; House on Haunted
+Hill 11 uploads to one. Browse cross-page dedupe uses the same rule.
+Episodes: the upload's own files and the sibling uploads are now
+merged into one deduped, ordered list instead of two blocks, so an
+episode shows once and S1E1 sorts before S1E2 whichever source each
+came from. Episode twins match by title plus compatible numbers, the
+kept copy inherits numbers the twin carries, and doubled letters
+collapse in the title key so a misspelled file name matches its
+sibling upload. Language and version markers are tags too: "Detour
+Vostfr" is the same film as "Detour", so vostfr, vost, vf, vo, subbed,
+dubbed and subtitles are stripped from the match key the same way. A
+translated title ("Detour - El desvio") is not a tag and still does
+not match; that needs a different mechanism, if it is wanted at all.
+
+"Not for me" (Desktop 5) and Hidden titles: "Not for me" now hides by
+normalized title-plus-year identity (the same-film rule), not by item
+id, so every duplicate upload of a hidden film stays hidden in Browse
+search, rows and recommendations. A remake of a hidden title still
+shows. Settings gains a Hidden titles list showing what this profile
+marked "Not for me", sorted by title, with a Show again button per
+title that clears the mark and refreshes the rows. How to Use points
+at it.
+
+More Like This (Desktop 11, Phone R2-6): root cause fixed: the success
+handler appended cards WITHOUT clearing the skeleton markup, so the
+first three slots stayed blank grey skeletons forever with the real
+cards only from the fourth slot on. The row is now cleared before the
+cards go in. (The fetch itself cannot hang: fetchWithTimeout rejects
+at 15s and the error path replaces the skeletons.) MLT now shows a
+"Finding similar titles..." loading line while the search runs, and
+the row is deduped by the same-film rule (Horror Express no longer
+appears twice).
+
+Adult leaks (Desktop 14): general rule, each candidate checked live
+against the full population it would move. ADDED to the adult
+subjects: "stripper", "strippers", "stag" (Teaserama and two more
+striptease shorts, nothing else), "mondo" (three exploitation
+documentaries), "child molester", "child molestation" (child-safety
+signals). ADDED title phrases that are adult or child-safety signals
+wherever they appear: "child molester", "child molestation", "jail
+bait", "jailbait" (every "jail bait" title in the catalog collections
+is the 1954 Ed Wood film). ADDED the untagged exploitation titles with
+no general signal to the query and the blocklist: "naked witch",
+"naked massacre", "invasion of the bee girls", "teaserama".
+DELIBERATELY NOT ADDED, with live evidence: "burlesque" (would move
+Chaplin's A Burlesque on Carmen and Lady of Burlesque),
+"exploitation" and "grindhouse" (would move Mad Max, Frogs, Alligator,
+Reefer Madness, Santa Claus Conquers the Martians, Manos), "nudity"
+(would move Lone Wolf and Cub and One Summer of Happiness), "nude"
+(would move a BBC Duchamp interview), "naked" (would move The Naked
+City, The Naked Street, The Naked Kiss, The Naked Island), "sexy"
+(uploaders tag even a 1951 family drama with it). ADULT_QUERY is now
+built from the subject and title lists, so the query and the
+client-side checks cannot drift apart; ADULT_EXCLUDE negates both
+clauses. The 18+ catalog grows from 107 to 173 titles across the
+three collections. Live verification, both ways, with the app's own
+query strings: each of the six titles returns from the 18+ section
+query and 0 from the normal exclusion; 12 mainstream titles return 0
+from the 18+ query. The four v1.6.1 blocklist titles (In the Realm of
+the Senses, Diary of a Nudist, Real Sex, Child Bride) were client-side
+only, which left them invisible everywhere including the 18+ section;
+they are now named in the query titles too, so the section returns
+them (each phrase checked live: every match is the adult film
+itself). Browse count leak fixed: searchArchive now reports how many
+items the adult filter removed and the Browse count subtracts them,
+so a search that only matches blocked titles reads "0 titles match",
+never "2 titles match... Showing 0". Known limitation: the
+subtraction covers the pages fetched so far; a blocked title sitting
+on a later, unfetched page can still inflate the total, but the count
+then reads as an ordinary match count and cannot reveal that a
+specific blocked title exists. Sex Madness STAYS in the 18+ section
+per Joshua's decision 2026-11-17, reversing the v1.4.0 decision that
+kept it in normal browsing; bare "sex" was NOT removed from
+ADULT_QUERY.
+
+Shelves show real ratings (Phone R2-1 / P8): continueWatchingItems,
+watchAgainItems and myListItems no longer hardcode rating null and
+downloads 0; they carry the rating and downloads the history entry or
+My List snapshot stored, so cards show "Archive 4.0" instead of "No
+rating", and details opened from them does too. Unrated titles still
+honestly show "No rating".
+
+Download (Desktop 8): the details button now reads "Open in new tab
+(303 MB)" on every title from the first render, never "Download" for
+something that opens a tab. The tap still attempts a real blob
+download first (fetch, then save through an object URL); only a
+download that actually succeeds re-labels the button "Download", and
+a blocked fetch keeps the honest new-tab label and remembers the
+fallback for the session. In practice the Archive's file servers send
+no CORS headers, so the new tab remains the path users will see.
+
+Details poster, rows, cards, text: the details poster changed from
+object-fit contain to cover, so a landscape Archive frame no longer
+renders as a thin horizontal strip in the middle of a tall grey box.
+(A natural-dimensions approach that letterboxes landscape images with
+contain was suggested after this fix was built; the built fix was left
+as-is per instruction. Note that landscape plus contain in the
+portrait frame is the thin-strip look QA flagged, so any future
+revisit should change the frame shape too, not just the fit.) The
+first card in 18+ rows is no longer clipped at the left edge: fillRow
+resets the row's scroll offset on every fresh fill, and row side
+padding went from 4px to 8px so the end cards clear the scrollport
+edge. "Load more" hides while "Searching archive.org..." is showing,
+stays hidden when a Browse search returns 0 results, and only returns
+when results arrive with more pages behind them; a failed Load more
+puts the button back so the user can retry. Card metadata is no longer
+duplicated in text: the title-card fallback no longer prints the
+"1968 · Movie" line the card body already shows, and badges no longer
+run together ("1959 · Show TV Show No rating Watched").
+Descriptions no longer open with raw boilerplate: cleanText strips a
+leading "Title: ... Summary:" prefix and a lone leading "Summary:".
+The year is no longer appended when it already appears anywhere in
+the title ("The Twilight Zone 1959 S01" stays as-is). "Because you
+watched" rows capitalise the subject ("Because you watched Horror").
+
+Posters: a resolved poster from a CORS-serving host (TMDB, OMDb,
+Wikimedia Commons) is now probed through a canvas; a blank one falls
+back to the title card and is dropped from the poster cache (replaced
+by a null, so it re-resolves tomorrow instead of being served as a
+good result for 30 days). A probe that cannot read its pixels fails
+open, and Archive poster files (no CORS headers) are never probed and
+stay trusted. Honest limits: the Beverly Hillbillies blank
+dark-green/black image is an Archive thumbnail (services/img), which
+archive.org serves without CORS headers, so no canvas probe can read
+its pixels and the blank frame cannot be detected without an OMDb/TMDB
+key or CORS headers from archive.org. Placeholder walls persist for
+the same reason: without keys, only the Archive's own poster files
+and Commons supply real posters.
+
+Linux desktop update check (standing order 2026-11-17): the Linux
+desktop install now checks for updates on launch. The check is
+silent: up to date, offline, or check failed means nothing happens
+and the app just opens. When a newer release exists, the launcher
+asks first (zenity, kdialog, or nothing when no dialog tool is
+present, in which case it launches normally). Only on a yes does it
+download the release. Downloads are installed only after their
+SHA-256 matches the checksum published with the release: a SHA256SUMS
+sidecar asset when the release carries one, otherwise the SHA-256 in
+the release notes. With no checksum anywhere, or a checksum that does
+not match, the update is refused and the user is told why. After an
+install the launcher asks before restarting. Yes restarts the program
+on the new version; no leaves the new files in place and the update
+takes full effect on the next launch. New file archiveflix-update.sh
+holds the check, download, verify, and install logic; archiveflix.sh
+runs it before opening the app; install.sh copies it into the install
+and writes a VERSION file with the installed version. Fixed the
+launcher and README claim that the installed copy "picks up updates
+the same way the web app does": the loopback server only serves the
+installed files, so the service worker can only cache the installed
+snapshot; it never pulled new releases. The launch-time check is now
+the update path. Release requirement: every release must publish the
+tarball SHA-256, as a SHA256SUMS sidecar asset (preferred) or in the
+release notes, or the updater will refuse to install it. The release
+tarball must also include archiveflix-update.sh.
+
 ## v1.6.1 - 2026-11-16
 
 Fix-everything build from the 2026-11-16 live QA pass (20 errors, UI

@@ -101,15 +101,26 @@ The installer puts the app in `~/.local/share/archiveflix`, the icon in
 the app menu and on the desktop, and checks the icon file is really
 there before it says it worked.
 
-The desktop copy keeps itself up to date. Opening it starts a small
-local web server on your own computer (http://127.0.0.1:18471, only
-reachable from this computer) so the app can cache itself for offline
-use and pick up new releases the same way the web app does. The server
-uses almost no resources, stops when you log out or restart, and the
-uninstaller stops it too. If another program is already using that
-port, the launcher tells you instead of opening. If python3 is not
-installed, the app still opens straight from its files, but that copy
-does not auto-update: grab the new release and reinstall to update.
+The desktop copy checks for updates when you open it. The check is
+silent: if you are up to date, or the computer is offline, nothing
+happens and the app just opens. If a newer release is out, it asks
+first; only if you say yes does it download the release, and it
+installs the download only after its SHA-256 checksum matches the one
+published with the release. A download that fails the check is never
+installed. After an update it asks before restarting: yes restarts
+with the new version, no keeps the current copy running and the update
+takes full effect the next time you open the app. The check needs
+python3 and curl or wget; without them the app still opens normally,
+but you update by grabbing the new release and reinstalling.
+
+Opening the app starts a small local web server on your own computer
+(http://127.0.0.1:18471, only reachable from this computer) so the app
+can cache itself for offline use. The server uses almost no
+resources, stops when you log out or restart, and the uninstaller
+stops it too. If another program is already using that port, the
+launcher tells you instead of opening. If python3 is not installed,
+the app still opens straight from its files, but that copy does not
+check for updates.
 
 To remove ARCHIVEFLIX, run `bash uninstall.sh` from the release
 folder. It asks first, then removes the app files, the app menu entry,
@@ -169,7 +180,9 @@ any server except archive.org (for the catalog, playback and
 downloads), omdbapi.com (only when you saved a key, only for IMDb
 ratings and posters), api.themoviedb.org (only when you saved a key,
 only for posters) and commons.wikimedia.org (only for public domain
-poster search). The service worker keeps a copy of
+poster search). The Linux desktop copy also contacts api.github.com
+when it opens, only to ask whether a newer release exists; that check
+sends no personal data. The service worker keeps a copy of
 the app itself and a capped set of posters on your device so the app
 opens offline; it never stores your history or your key.
 

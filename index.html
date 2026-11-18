@@ -210,6 +210,15 @@
       <button class="btn" id="densityCompact" aria-pressed="false">Compact</button>
     </div>
 
+    <h2 class="section-title">Playback</h2>
+    <p class="sub">When an episode ends, the next one starts by itself after a short countdown. Turn this off and the player waits for you to choose the next episode instead.</p>
+    <div class="key-row">
+      <label class="hidewatched">
+        <input type="checkbox" id="autoAdvanceToggle">
+        <span>Play the next episode automatically</span>
+      </label>
+    </div>
+
     <h2 class="section-title" id="profilesSection">Profiles</h2>
     <p class="sub">Up to 5 profiles. Each one has its own history, My List, likes and theme. API keys are shared across profiles on this device.</p>
     <div id="profileList" class="profile-list"></div>
@@ -225,6 +234,10 @@
     <h2 class="section-title">18+ section</h2>
     <p class="sub">A private adults only area for this profile, with films from archive.org tagged for adults. It stays hidden until you turn it on, and opening it needs this profile's PIN.</p>
     <div id="adultSettings"></div>
+
+    <h2 class="section-title">Hidden titles</h2>
+    <p class="sub">Titles this profile marked Not for me. They stay out of rows and Browse until you bring one back.</p>
+    <div id="hiddenTitles"></div>
 
     <h2 class="section-title">IMDb ratings (optional)</h2>
     <p class="sub">The Top IMDb row uses real IMDb ratings, and cards can show real movie posters, only when you add a free OMDb key. The key stays in this browser and is never sent anywhere except omdbapi.com. Without a key, that row falls back to Archive ratings and says so.</p>
@@ -271,7 +284,7 @@
       <li><strong>Profiles.</strong> Tap your avatar in the top bar to switch profiles, or add one under Profiles above. Each profile keeps its own history, My List, likes and theme.</li>
       <li><strong>PINs.</strong> Set a PIN on a profile under Profiles to lock it. You are asked for the PIN each time you open that profile. A PIN is a casual lock for this device, not encryption.</li>
       <li><strong>My List.</strong> Open any title and tap Add to My List to save it for later. Saved titles show under My List in the top bar.</li>
-      <li><strong>Reactions.</strong> Tap Like on a title you enjoy and the home page suggests more like it. Tap Not for me and that title stops appearing in rows and Browse.</li>
+      <li><strong>Reactions.</strong> Tap Like on a title you enjoy and the home page suggests more like it. Tap Not for me and that title stops appearing in rows and Browse. Bring it back any time under Hidden titles in Settings.</li>
       <li><strong>OMDb and TMDB keys.</strong> Paste a free OMDb key above to see real IMDb ratings and posters, and a free TMDB key for more posters. Keys stay in this browser only.</li>
       <li><strong>Install.</strong> On Android, open this page in Chrome, tap the three dot menu, then Add to Home screen. On iPhone, open it in Safari, tap Share, then Add to Home Screen.</li>
     </ol>
@@ -292,16 +305,18 @@
     <button class="sheet-close" id="playerClose" aria-label="Close player">Close</button>
     <h2 id="playerTitle" class="player-title"></h2>
     <div id="playerFrame" class="player-frame"></div>
+    <div id="playerErrorActions" class="video-actions"></div>
     <p class="sub player-note" id="playerNoteVideo" hidden>Your place is saved automatically as you watch, and you pick up right where you left off. When the film ends it is marked finished for you.</p>
     <p class="sub player-note" id="playerNoteEmbed" hidden>This title has no file this browser can play directly, so it plays through the Archive player, which cannot report where you are. Mark your place with the buttons below.</p>
     <div class="progress-btns" id="playerManualBtns" hidden>
       <button class="btn btn-ghost" data-progress="0.25">25% watched</button>
       <button class="btn btn-ghost" data-progress="0.5">50% watched</button>
       <button class="btn btn-ghost" data-progress="0.75">75% watched</button>
-      <button class="btn btn-primary" data-progress="1">Finished</button>
+      <button class="btn btn-ghost" data-progress="1">Finished</button>
     </div>
     <div class="video-actions">
       <button class="btn btn-ghost small" id="playerRestartBtn" hidden>Start from the beginning</button>
+      <button class="btn btn-ghost small" id="playerNextBtn" hidden>Next episode</button>
     </div>
     <p id="playerPlace" class="player-place" aria-live="polite"></p>
   </div>

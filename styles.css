@@ -517,7 +517,11 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   display: flex;
   gap: 16px;
   overflow-x: auto;
-  padding: 16px 4px 20px;
+  /* 8px of side padding, not 4: the first and last cards clear
+     the scrollport edge with their borders and shadows intact
+     instead of sitting hard against it (the first card in the
+     18+ rows read as clipped at the left edge). */
+  padding: 16px 8px 20px;
   /* No visible scrollbar track: swipe, wheel and arrow scrolling
      still work, but the native track underneath every row is gone. */
   scrollbar-width: none;
@@ -1179,9 +1183,12 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 }
 .details-top { display: flex; gap: 28px; flex-wrap: wrap; }
 .details-poster-wrap { position: relative; width: 200px; aspect-ratio: 2 / 3; flex-shrink: 0; border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); background: var(--bg3); }
-/* Contain, not cover: the full poster shows, letterboxed on the
-   frame background, instead of center-cropping faces and text. */
-.details-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 10px; background: var(--bg3); }
+/* Cover, not contain: the poster fills its frame like the card
+   posters do. Contain letterboxed the Archive's wide video
+   frames into a thin horizontal strip in the middle of the tall
+   frame; cover crops the sides of a wide frame instead, and a
+   true portrait poster still shows in full. */
+.details-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 10px; background: var(--bg3); }
 .details-info { flex: 1 1 260px; min-width: 0; }
 .details-info h2 { margin: 0 28px 8px 0; font-size: clamp(1.4rem, 4vw, 1.8rem); font-weight: 800; line-height: 1.2; }
 .details-meta { color: var(--muted); margin: 0 0 12px; font-weight: 600; }
@@ -1349,7 +1356,7 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 html[data-density="compact"] .card { flex-basis: 160px; }
 html[data-density="compact"] .skeleton-card { flex-basis: 160px; height: 323px; }
 html[data-density="compact"] .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
-html[data-density="compact"] .row-scroll { gap: 12px; padding: 12px 4px 16px; }
+html[data-density="compact"] .row-scroll { gap: 12px; padding: 12px 8px 16px; }
 html[data-density="compact"] .row { margin-top: 28px; }
 html[data-density="compact"] .card-body { padding: 10px 12px 12px; }
 

@@ -52,6 +52,19 @@ done
 cp "$ICON_SRC" "$APP_DIR/icon.svg"
 cp "$SRC_DIR/archiveflix.sh" "$APP_DIR/archiveflix.sh"
 chmod +x "$APP_DIR/archiveflix.sh"
+# The launch time update checker, copied when the source tree has it
+# (older source trees do not, and install fine without it).
+if [ -f "$SRC_DIR/archiveflix-update.sh" ]; then
+  cp "$SRC_DIR/archiveflix-update.sh" "$APP_DIR/archiveflix-update.sh"
+  chmod +x "$APP_DIR/archiveflix-update.sh"
+fi
+# Record the installed version for the launch time update check. The
+# checker reads APP_VERSION from app.js first and falls back to this
+# file, so a missing VERSION file never breaks an install.
+INSTALLED_VERSION="$(sed -n 's/^var APP_VERSION = "\(.*\)";.*$/\1/p' "$SRC_DIR/app.js" | head -n 1)"
+if [ -n "$INSTALLED_VERSION" ]; then
+  printf '%s\n' "$INSTALLED_VERSION" > "$APP_DIR/VERSION"
+fi
 
 # Desktop entry, with the real home folder path baked in. No quotes
 # anywhere in Exec or Icon: the desktop file parser does not strip

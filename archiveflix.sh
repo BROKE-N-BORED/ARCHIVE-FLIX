@@ -2,8 +2,11 @@
 # ARCHIVEFLIX launcher. Serves the installed app over loopback and opens
 # it in the browser: app mode when a Chromium browser is available, a
 # plain window otherwise. The loopback server is what lets the service
-# worker run, so the installed copy caches itself for offline use and
-# picks up updates the same way the web app does. The server stays
+# worker run, so the installed copy caches itself for offline use.
+# The server only serves the files installed on this computer, so it
+# cannot pull new releases on its own; updates come from the launch
+# time check in archiveflix-update.sh, which asks first and verifies
+# the download before installing it. The server stays
 # running after the browser closes (a browser that is already open
 # returns at once, so the launcher cannot tell when the window closes);
 # it is a lightweight local server, bound to 127.0.0.1 only, and it stops
@@ -79,10 +82,25 @@ start_server() {
   return 1
 }
 
+# Launch time update check (see archiveflix-update.sh): silent when
+# up to date or when the check cannot run, asks before downloading,
+# and only installs a download whose SHA-256 matches the release.
+# Exit 10 means an update was installed and the user said restart
+# now, so re-exec this launcher (fresh code, new files) with the
+# check skipped for this run. Any other result launches normally.
+if [ -z "${ARCHIVEFLIX_SKIP_UPDATE_CHECK:-}" ] && [ -f "$APP_DIR/archiveflix-update.sh" ]; then
+  UPDATE_STATUS=0
+  bash "$APP_DIR/archiveflix-update.sh" "$APP_DIR" || UPDATE_STATUS=$?
+  if [ "$UPDATE_STATUS" -eq 10 ]; then
+    exec env ARCHIVEFLIX_SKIP_UPDATE_CHECK=1 bash "$APP_DIR/archiveflix.sh"
+  fi
+fi
+
 # Prefer the loopback server: it enables the service worker, so the
-# installed copy caches offline and picks up updates. If python3 is
-# missing or the server will not start, fall back to opening the files
-# directly; the app still works, it just does not auto-update.
+# installed copy caches offline. If python3 is missing or the server
+# will not start, fall back to opening the files directly; the app
+# still works, but that copy does not check for updates: grab the new
+# release and reinstall to update.
 if command -v python3 >/dev/null 2>&1; then
   STATUS="$(probe_port)" || STATUS="free"
   case "$STATUS" in
