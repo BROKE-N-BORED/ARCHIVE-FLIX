@@ -1,5 +1,89 @@
 # CHANGELOG
 
+## v1.6.3 - 2026-11-20
+
+Home rows change every day now, and the personalized rows are picked
+from what you actually watched, weighted by how much the watching
+proves.
+
+Daily rotation: every home row used to fetch the first page of a
+downloads-ranked query, so it showed the same top titles every day,
+forever. Each row now pulls a deep pool of 240 candidates and shows a
+slice chosen by the calendar day: a seeded shuffle of the pool,
+re-ranked for variety (below). The slice is a calculation, not a dice
+roll: it is identical all day (refreshing or reopening never
+reshuffles) and different tomorrow. Top Rated and Top IMDb stay
+ranked charts, but the day's window into the chart walks forward
+daily instead of always starting at number one. Newly Added is not
+rotated: newest first is the point, and it changes on its own. The
+hero now comes from the day's Trending slice, so it rotates too. The
+Director's Picks and Cartoons rows rotate the same way, and so do the
+rows inside the 18+ section, which share the same row loader. All of
+a row's existing filters (watched, adult exclusion, same-film
+collapsing, year rules) run on the whole pool before the day's slice
+is picked, so nothing filtered out can rotate in. A row whose pool is
+no bigger than the row itself shows the whole pool, exactly as
+before, so no genre row can come back empty because of the math.
+
+Measured taste: "Because you watched" rows and More Like This are
+now weighted by measured engagement, on a scale where a full
+positive (a finish, a Like, or a 5-star rating) is 1.0. A title
+watched to at least 90 percent counts as finished and weighs 1.0;
+re-watches add more, growing on a log curve so repeats keep helping
+without exploding. A title watched 70 to 90 percent weighs at the
+fraction watched. A title started and dropped under 70 percent is a
+weak negative at 0.2, not a taste: it no longer seeds
+recommendations the way a finished film does. Under 2 minutes in
+and under 5 percent of the runtime there is no signal at all. A
+title counts once, at its strongest entry, so a show's many episodes
+are one signal, not dozens. Directors and decades are weighed the
+same way as subjects (new history entries record the director;
+older ones simply contribute none). The viewing tiers (90 percent
+finished, 70 percent watcher, 2 minutes starter) are Netflix's
+disclosed categories; the negative weight of 0.2 sits in the classic
+Rocchio band (0.15 to 0.25 against a positive of 0.75); the repeat
+curve's log shape follows Hu, Koren and Volinsky (2008), whose raw
+alpha of 40 is a matrix-factorization loss weight and is not copied
+into a taste score.
+
+Exploit, explore, diversify: a "Because you watched" row is mostly
+your measured taste (exploitation), re-ranked with MMR (Maximal
+Marginal Relevance, Carbonell and Goldstein 1998; lambda 0.5, the
+balanced point in platform defaults and the optimum in the one
+recommendation study that swept it) so one director or sub-genre
+cannot take the whole row. A fixed 20 percent of the row's slots
+(EXPLORE_SHARE) is exploration: popular titles outside your top
+subjects and eras, drawn from the quality-ranked pool, not the raw
+catalog, so the app keeps learning instead of narrowing. The target
+is about 30 percent of a personalized row from outside your dominant
+cluster (Ziegler et al. 2005 put the satisfaction sweet spot at 30
+to 40 percent diversification), reached through MMR plus
+exploration rather than a hard quota. The same MMR pass lightly
+diversifies the rotated catalog rows. Cold start: a profile needs
+5 weighted signals before personalization leads (content-based
+accuracy flattens at 5 inputs, Choi et al. 2020) and 10 before it
+stands alone with no popularity blend; below that, rows stay
+popularity-led, and an empty profile behaves exactly as before.
+There is no published threshold for trusting an implicit-only
+profile; the 10 is an inference from the ratings literature,
+flagged as one.
+
+Honesty limit, stated plainly: there is no cross-user collaborative
+filtering here and none is claimed. Your data stays on your device,
+so nothing can learn from other viewers. What ships is content-based
+taste weighting plus structured exploration plus diversity
+re-ranking, the proven methods that fit a single-profile on-device
+app.
+
+Also fixed, found by this build's phone verification: a hero whose
+description contains a raw URL (many Archive descriptions do) could
+stretch the whole hero past the edge of a phone screen, title and
+buttons with it, because an unbroken word sized the hero's flex
+content. The hero content can now shrink properly and description
+text breaks long tokens instead of widening the layout. The wider
+hero pool from rotation made this surface more often; it could
+happen before with the right title.
+
 ## v1.6.2 - 2026-11-17
 
 Fix-everything build from the 2026-11-17 live QA round 2 (desktop plus

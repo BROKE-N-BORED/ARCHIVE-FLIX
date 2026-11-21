@@ -21,7 +21,7 @@ var API = "https://archive.org/advancedsearch.php";
 var META_API = "https://archive.org/metadata/";
 /* The release version, shown in Settings About. Bump with each
    release alongside the service worker cache version. */
-var APP_VERSION = "1.6.2";
+var APP_VERSION = "1.6.3";
 var STORE_KEY = "archiveflix.v1";
 var PROFILES_KEY = "archiveflix.profiles.v1";
 var MAX_PROFILES = 5;
@@ -2746,6 +2746,11 @@ function recordProgress(item, progress, position, duration, deferPersist) {
     title: item.title,
     year: item.year,
     type: item.type,
+    /* The director rides along (same pattern as rating and
+       downloads) so the taste profile can weigh directors, not
+       just subjects. Entries saved before this carry none, and
+       simply contribute no director signal. */
+    creator: item.creator || (prev && prev.creator) || "",
     subjects: item.subjects || (prev && prev.subjects) || [],
     adult: isAdultItem(item) || !!(prev && prev.adult),
     /* The rating rides along so Continue Watching, Watch Again,
@@ -2801,6 +2806,7 @@ function setReaction(item, value) {
       title: item.title,
       year: item.year,
       type: item.type,
+      creator: item.creator || "",
       subjects: item.subjects || []
     };
     toast(value === 1 ? "Liked" : "Noted as not for you");
@@ -4660,6 +4666,178 @@ function yearClauseRange(from, to) {
   return "(" + base + " OR title:(" + terms.join(" OR ") + "))";
 }
 
+/* ---------- Daily rotation ---------- */
+/* Home rows used to fetch the first page of a downloads ranked
+   query and show it forever: download counts barely move, so
+   page one was the same titles every day. Now each row pulls a
+   deep pool (ROW_POOL records in one request; the Archive
+   search API returns that many in a single page, verified live)
+   and shows a slice chosen by the calendar day. The choice is a
+   calculation, never a dice roll: the same day always computes
+   the same slice, so refreshing or reopening never reshuffles,
+   and tomorrow computes a different one. Nothing is stored:
+   the day number comes from the clock at load time. */
+var ROW_POOL = 240;
+
+/* Maximal Marginal Relevance (Carbonell and Goldstein, 1998):
+   each next pick balances relevance against similarity to the
+   picks already made, so a row is not twenty near-identical
+   titles. The 1998 paper sets no canonical lambda; platform
+   practice clusters at 0.5 to 0.8 and the one recommendation
+   study that swept the parameter found its optimum at 0.5. */
+var MMR_LAMBDA = 0.5;
+/* Similarity is capped at this before scaling into 0..1. */
+var MMR_SIM_CAP = 4;
+
+/* Exploit and explore, the bandit balance: this share of a
+   personalized row's slots is filled from outside the profile's
+   top subjects and eras. Published span for epsilon exploration
+   runs 0.01 to 0.30 (Sutton and Barto, 2018; Schibsted's
+   production bandit used 5 percent random per rerank; Spotify
+   bounds exploration to a pre-filtered relevant pool; Amazon
+   Personalize's default explorationWeight is 0.3 as a ranking
+   weight). Picks come from the quality ranked pool, not the raw
+   catalog, following the Spotify pattern. The share is fixed,
+   not random, so the row's makeup is the same all day. */
+var EXPLORE_SHARE = 0.20;
+
+/* About this share of a personalized row should come from
+   outside the profile's dominant cluster, reached through MMR
+   and the exploration share rather than a hard quota (Ziegler
+   et al., 2005: diversification raised satisfaction, with a
+   sweet spot of 30 to 40 percent). A sanity target the row
+   composition is checked against, not a rule the code forces. */
+var DIVERSITY_TARGET = 0.30;
+
+/* Days since the epoch, UTC: the one day definition the hero
+   pick and the rotation share, so they agree on when "today"
+   changes. */
+function dayNumber() {
+  return Math.floor(Date.now() / 86400000);
+}
+
+/* FNV-1a hash of a row id, so each row rotates on its own seed
+   and two rows never move in lockstep. */
+function saltHash(str) {
+  var h = 0x811c9dc5;
+  str = String(str || "");
+  for (var i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/* mulberry32: a tiny deterministic PRNG. Same seed, same
+   stream, on every device and every load. */
+function seededRandom(seed) {
+  var a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    var t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* A Fisher-Yates shuffle of the pool driven by the day's seed:
+   the whole pool is reordered, so any title in the pool can
+   reach the visible slice, and the order is identical for the
+   whole day. Returns a copy; the pool's own order (the caller's
+   ranking) is untouched. */
+function dailyShuffle(items, salt, day) {
+  var rand = seededRandom(((day == null ? dayNumber() : day) ^ saltHash(salt)) >>> 0);
+  var out = (items || []).slice();
+  for (var i = out.length - 1; i > 0; i--) {
+    var j = Math.floor(rand() * (i + 1));
+    var tmp = out[i];
+    out[i] = out[j];
+    out[j] = tmp;
+  }
+  return out;
+}
+
+/* The day's window into a ranked pool: the window starts count
+   further in each day and wraps at the end, so a ranked row
+   (Top Rated, Top IMDb) keeps its chart order inside the window
+   while the window itself walks the whole chart over the
+   following days. */
+function dailyWindow(items, count, salt, day) {
+  var pool = items || [];
+  if (pool.length <= count) return pool.slice();
+  var start = (((day == null ? dayNumber() : day) * count) +
+    (saltHash(salt) % count)) % pool.length;
+  var out = [];
+  for (var i = 0; i < count; i++) out.push(pool[(start + i) % pool.length]);
+  return out;
+}
+
+/* The normalized director key two items are compared by. */
+function creatorKey(creator) {
+  return String(creator || "").toLowerCase().trim();
+}
+
+/* How alike two titles are, for diversity: same director is the
+   strongest sameness, then each shared (non-generic) subject,
+   then the same decade. */
+function pickSimilarity(a, b) {
+  if (!a || !b) return 0;
+  var s = 0;
+  var ca = creatorKey(a.creator);
+  if (ca && ca === creatorKey(b.creator)) s += 2;
+  s += sharedSignalCount(a.subjects, b.subjects);
+  if (a.year != null && b.year != null &&
+      Math.floor(a.year / 10) === Math.floor(b.year / 10)) s += 0.5;
+  return s;
+}
+
+/* Greedy MMR fill over scored candidates ({item, rel} with rel
+   in 0..1): repeatedly take the candidate with the best balance
+   of relevance against its similarity to what is already
+   picked. Deterministic: ties keep the order the caller
+   supplied. Only the first limit * 3 candidates are considered,
+   which keeps the cost flat on a phone; callers pass pools in
+   an order worth favouring (a ranking, or the day's shuffle). */
+function mmrPick(scored, limit) {
+  var pool = (scored || []).slice(0, Math.max(limit, limit * 3));
+  var picked = [];
+  while (pool.length && picked.length < limit) {
+    var bestIdx = 0;
+    var bestScore = -Infinity;
+    for (var i = 0; i < pool.length; i++) {
+      var maxSim = 0;
+      for (var j = 0; j < picked.length; j++) {
+        var sim = pickSimilarity(pool[i].item, picked[j].item);
+        if (sim > maxSim) maxSim = sim;
+      }
+      var score = MMR_LAMBDA * pool[i].rel -
+        (1 - MMR_LAMBDA) * Math.min(1, maxSim / MMR_SIM_CAP);
+      if (score > bestScore) { bestScore = score; bestIdx = i; }
+    }
+    picked.push(pool.splice(bestIdx, 1)[0]);
+  }
+  return picked.map(function (s) { return s.item; });
+}
+
+/* The day's slice of a catalog row: shuffle the pool on the
+   day's seed, then an MMR pass over the shuffled order (earlier
+   in the shuffle counts as more relevant), so one director or
+   sub-genre cannot take the whole row when the pool offers
+   variety. A pool no bigger than the row is shown whole, in
+   pool order, exactly as before rotation existed, so a small
+   row can never come back empty or short because of the math. */
+function dailySlice(items, salt, day) {
+  var pool = items || [];
+  if (pool.length <= ROW_SIZE) return pool.slice();
+  var shuffled = dailyShuffle(pool, salt, day);
+  var n = shuffled.length;
+  var scored = shuffled.map(function (it, idx) {
+    return { item: it, rel: 1 - idx / n };
+  });
+  return mmrPick(scored, ROW_SIZE);
+}
+
 var ROW_DEFS = [
   { id: "trending",  title: "Trending Now", q: MOVIES, sort: "downloads desc", skipNoYear: true },
   { id: "toprated",  title: "Top Rated", q: MOVIES, sort: "downloads desc", rows: 100, byRating: true, skipNoYear: true },
@@ -4674,7 +4852,7 @@ var ROW_DEFS = [
   { id: "shows",     title: "Shows", q: "collection:classic_tv", sort: "downloads desc", type: "show" },
   { id: "cartoons",  title: "Cartoons", special: "cartoons" },
   { id: "animation", title: "Animation", q: "mediatype:movies AND subject:cartoons", sort: "downloads desc", type: "cartoon", noYoutube: true },
-  { id: "new",       title: "Newly Added", q: MOVIES, sort: "addeddate desc" },
+  { id: "new",       title: "Newly Added", q: MOVIES, sort: "addeddate desc", noRotate: true },
   { id: "golden",    title: "Golden Age 1930s", q: MOVIES + " AND " + yearClauseRange(1930, 1939), sort: "downloads desc", yearRange: [1930, 1939] },
   { id: "silent",    title: "Silent Era", q: MOVIES + " AND " + yearClauseRange(1890, 1929), sort: "downloads desc", yearRange: [1890, 1929] },
   { id: "directors", title: "Directors Picks", subtitle: "Hitchcock, Chaplin, Keaton and Welles", special: "directors" },
@@ -4685,7 +4863,14 @@ function loadRow(def) {
   if (def.special === "directors") return loadDirectors();
   if (def.special === "cartoons") return loadCartoons();
   if (def.special === "imdb") return loadTopImdb();
-  return searchArchive(def.q, { rows: def.rows || 30, sort: def.sort, type: def.type,
+  /* Rotating rows pull a deep pool (ROW_POOL) and let the day
+     choose the slice; the row's own filters run on the whole
+     pool first, so nothing filtered out can rotate in. A
+     noRotate row (Newly Added: newest first is the point, and
+     it changes on its own) keeps the shallow first page it
+     always had. */
+  var poolRows = def.noRotate ? (def.rows || 30) : (def.rows || ROW_POOL);
+  return searchArchive(def.q, { rows: poolRows, sort: def.sort, type: def.type,
       allowAdult: !!def.allowAdult })
     .then(function (res) {
       var items = res.items;
@@ -4696,11 +4881,15 @@ function loadRow(def) {
       if (def.skipNoYear) items = items.filter(function (it) { return it.year != null; });
       if (def.byRating) {
         /* Ranked by review-weighted score, not raw avg_rating:
-           the raw sort's top is all single-review 5.0s. */
+           the raw sort's top is all single-review 5.0s. The
+           day's window rotates inside that ranked pool, so the
+           row stays a chart, just not the same chart daily. */
         items = items.filter(function (it) { return it.rating != null; })
           .sort(topRatedSort);
+        return dailyWindow(items, ROW_SIZE, def.id);
       }
-      return items.slice(0, ROW_SIZE);
+      if (def.noRotate) return items.slice(0, ROW_SIZE);
+      return dailySlice(items, def.id);
     });
 }
 
@@ -4708,7 +4897,7 @@ function loadDirectors() {
   var directors = ["Alfred Hitchcock", "Charlie Chaplin", "Buster Keaton", "Orson Welles"];
   var jobs = directors.map(function (name) {
     return searchArchive('creator:"' + name + '" AND mediatype:movies',
-      { rows: 8, sort: "downloads desc", type: "movie" })
+      { rows: 24, sort: "downloads desc", type: "movie" })
       .then(function (res) { return { ok: true, items: res.items }; },
             function () { return { ok: false, items: [] }; });
   });
@@ -4727,17 +4916,18 @@ function loadDirectors() {
     });
     items = dedupeItems(items);
     items.sort(function (a, b) { return b.downloads - a.downloads; });
-    return items.slice(0, ROW_SIZE);
+    /* The merged pool rotates daily like the other rows. */
+    return dailySlice(items, "directors");
   });
 }
 
 function loadCartoons() {
   var curated = searchArchive("collection:classic_cartoons",
-    { rows: 30, sort: "downloads desc", type: "cartoon" })
+    { rows: 120, sort: "downloads desc", type: "cartoon" })
     .then(function (res) { return { ok: true, items: res.items }; },
           function () { return { ok: false, items: [] }; });
   var extra = searchArchive("mediatype:movies AND subject:cartoons",
-    { rows: 30, sort: "downloads desc", type: "cartoon" })
+    { rows: 120, sort: "downloads desc", type: "cartoon" })
     .then(function (res) { return { ok: true, items: res.items }; },
           function () { return { ok: false, items: [] }; });
   return Promise.all([curated, extra]).then(function (res) {
@@ -4752,7 +4942,7 @@ function loadCartoons() {
     res[1].items.forEach(function (it) {
       if (!seen[it.id] && !isYoutubeRip(it.id)) { seen[it.id] = true; items.push(it); }
     });
-    return dedupeItems(items).slice(0, ROW_SIZE);
+    return dailySlice(dedupeItems(items), "cartoons");
   });
 }
 
@@ -4762,10 +4952,12 @@ function loadTopImdb() {
   return searchArchive(MOVIES, { rows: 100, sort: "downloads desc", type: "movie" })
     .then(function (res) {
       /* Review-weighted, like Top Rated: the raw avg_rating sort
-         is all single-review 5.0s at the top. */
-      var items = res.items.filter(function (it) { return it.rating != null && it.year != null; })
-        .sort(topRatedSort)
-        .slice(0, 18);
+         is all single-review 5.0s at the top. The day's window
+         rotates inside the ranked pool before enrichment, so
+         the row is not the same 18 titles every day. */
+      var items = dailyWindow(
+        res.items.filter(function (it) { return it.rating != null && it.year != null; })
+          .sort(topRatedSort), 18, "imdb");
       if (!state.omdbKey) return { items: items, imdb: false };
       var jobs = items.slice(0, 12).map(function (it) {
         return omdbRating(it.title, it.year).then(function (r) {
@@ -4858,8 +5050,7 @@ function makeHeroPicker() {
 
 function heroPick(items) {
   if (!items.length) return null;
-  var day = Math.floor(Date.now() / 86400000);
-  return items[day % Math.min(items.length, 5)];
+  return items[dayNumber() % Math.min(items.length, 5)];
 }
 
 /* The hero skeleton: a scrim plus grey title, text and button
@@ -5037,8 +5228,15 @@ function similarScore(seed, it) {
    plus same type and era within 25 years) come first; weaker
    matches backfill after them, so the row prefers real neighbours
    but never goes empty when the query only found loose ones.
-   Pure, so the node test can drive it. */
-function rankSimilar(seed, items) {
+   When a taste profile is passed, a candidate that also matches
+   the profile's measured taste (its finished and liked titles'
+   subjects, directors and decades) gets a bonus, capped at one
+   shared subject's worth and scaled by how far the profile may
+   lead, so taste breaks ties and lifts real neighbours without
+   ever swamping the seed match. No profile, or one too young to
+   lead, ranks exactly as before. Pure, so the node test can
+   drive it. */
+function rankSimilar(seed, items, taste) {
   var scored = [];
   (items || []).forEach(function (it) {
     if (it.id === seed.id) return;
@@ -5048,7 +5246,8 @@ function rankSimilar(seed, items) {
     var strong = s.shared >= 2 ||
       (s.shared >= 1 && it.type === seed.type && seed.year != null &&
        it.year != null && Math.abs(seed.year - it.year) <= 25);
-    scored.push({ item: it, score: s.score, strong: strong });
+    var bonus = taste ? Math.min(tasteScoreOf(it, taste), 10) * (taste.lead || 0) : 0;
+    scored.push({ item: it, score: s.score + bonus, strong: strong });
   });
   scored.sort(function (a, b) {
     if (a.strong !== b.strong) return a.strong ? -1 : 1;
@@ -5076,63 +5275,225 @@ function seedDedupeKeys() {
   return keys;
 }
 
-/* The user's strongest taste signals: finished titles count 1,
-   in-progress titles count a half, likes count 2. Returns the top
-   two subjects with the types of the items that seeded them, so a
-   user who only watches shows gets show rows, not movie rows.
-   The returned subject keeps the casing it was stored with, so
-   the row label reads "Drama", not "drama". A subject that is
-   just the seeding title itself ("twilight zone 1959" on The
-   Twilight Zone) is not a taste and never seeds a row: without
-   that, the row queries the show's own name and comes back
-   holding only the show itself. */
-function topSignalSubjects() {
-  var counts = {};
+/* ---------- Measured taste ---------- */
+/* Personalized rows are computed from what this profile actually
+   did, weighted by how much the doing proves. The constants are
+   grounded in the recommender literature (research file:
+   archiveflix-review/recommender-evidence-2026-11-20.md), not
+   guessed; where the literature gives no number, the comment
+   says so. Honesty limit: cross-user collaborative filtering is
+   impossible here, by design. One profile, data on this device
+   only, nothing uploaded. What ships is content-based taste
+   weighting plus structured exploration and diversity
+   re-ranking, the proven methods that fit this app. */
+var POS_WEIGHT = 1.0;  /* a finish, a Like, or a top (5 star) rating */
+var NEG_WEIGHT = 0.2;  /* a full negative is worth this share of a full
+                          positive (Rocchio relevance feedback: negative
+                          0.15 to 0.25 against a positive of 0.75;
+                          Manning, Raghavan and Schutze, 2008) */
+var FINISH_FRACTION = 0.9;  /* watched at least this far counts as
+                               finished (Netflix's completer tier,
+                               disclosed 2019) */
+var WATCHED_FRACTION = 0.7; /* below this a start is an abandonment,
+                               not a watch (Netflix's watcher tier) */
+var SIGNAL_FLOOR_SECONDS = 120;  /* under 2 minutes in AND under 5
+                                    percent of the runtime, nothing was
+                                    measured at all (Netflix's starter
+                                    tier: below 2 minutes does not
+                                    register) */
+var SIGNAL_FLOOR_FRACTION = 0.05;
+var REPEAT_WEIGHT = 0.5;  /* per-repeat coefficient on a log curve:
+                             confidence grows with repeats at a
+                             diminishing rate (Hu, Koren and Volinsky,
+                             2008, log confidence form). Their alpha of
+                             40 is a matrix factorization loss weight,
+                             NOT a taste weight, and is not copied; the
+                             literature gives the log shape, not this
+                             coefficient. */
+var PROFILE_MIN_SIGNALS = 5;  /* weighted signals before personalization
+                                 leads at all (content based accuracy
+                                 flattens at 5 inputs: Choi et al.,
+                                 2020, MovieLens) */
+var PROFILE_TRUSTED = 10;     /* weighted signals before the profile
+                                 stands alone with no popularity blend
+                                 (commercial services ask for about 10;
+                                 no published threshold exists for
+                                 implicit only profiles, so this one is
+                                 an inference, flagged as one) */
+
+/* The taste weight of one history entry, on the POS_WEIGHT
+   scale. A finish is a full positive, plus a log-shaped repeat
+   bonus. A substantial partial watch (70 to 90 percent) weighs
+   at its completion fraction. An abandonment (under 70 percent)
+   is a weak negative: it was sampled and dropped, which is
+   evidence, just much weaker than a finish (NEG_WEIGHT). Under
+   the signal floor (under 2 minutes in and under 5 percent of
+   the runtime) nothing was measured at all and the weight is 0:
+   never a dislike, just no signal. Pure, so the node test can
+   drive it. */
+function engagementWeight(h) {
+  if (!h) return 0;
+  var p = h.progress || 0;
+  if (p <= 0) return 0;
+  if (p < SIGNAL_FLOOR_FRACTION && (h.position || 0) < SIGNAL_FLOOR_SECONDS) return 0;
+  if (p >= FINISH_FRACTION) {
+    var extra = Math.max(0, (h.watchCount || 1) - 1);
+    return POS_WEIGHT + REPEAT_WEIGHT * Math.log(1 + extra);
+  }
+  if (p >= WATCHED_FRACTION) return p * POS_WEIGHT;
+  return -NEG_WEIGHT;
+}
+
+/* A star rating's taste weight: a straight line between the two
+   sourced anchors, a top rating at POS_WEIGHT and a full
+   negative at -NEG_WEIGHT, with 3 stars neutral. The anchors are
+   from the literature; the straight line between them is a
+   build judgment. */
+function ratingWeight(value) {
+  if (!value) return 0;
+  if (value >= 3) return (value - 3) / 2 * POS_WEIGHT;
+  return -NEG_WEIGHT * (3 - value) / 2;
+}
+
+/* The profile's measured taste: subject, director and decade
+   weights built from finished, re-watched, liked and rated
+   titles, each counted at its engagement weight. Adult titles
+   never contribute (the same guards the old seed picker used).
+   History counts once per title, at its strongest entry, so a
+   show's forty episodes are one strong signal, not forty. A
+   subject that is just the seeding title itself ("twilight zone
+   1959" on The Twilight Zone) is not a taste and is skipped.
+   Also carries the cold start bookkeeping: signals, the total
+   positive weight, and lead, how far personalization may lead
+   (0 below PROFILE_MIN_SIGNALS, 0.5 blended with popularity up
+   to PROFILE_TRUSTED, 1 standing alone). An empty profile has
+   empty maps and lead 0, and every consumer falls back to
+   today's popularity behaviour. */
+function tasteProfile() {
+  var subjects = {};
+  var creators = {};
+  var decades = {};
   var typesBySubject = {};
   var casingBySubject = {};
-  function addSubjects(subjects, weight, type, title) {
-    var titleKey = titleMatchKey(title);
-    (subjects || []).forEach(function (s) {
+  var signals = 0;
+  function add(src, weight) {
+    if (!weight) return;
+    if (weight > 0) signals += weight;
+    var titleKey = titleMatchKey(src.title);
+    (src.subjects || []).forEach(function (s) {
       var k = String(s).toLowerCase();
       if (titleKey && titleMatchKey(s) === titleKey) return;
-      counts[k] = (counts[k] || 0) + weight;
+      subjects[k] = (subjects[k] || 0) + weight;
       if (!casingBySubject[k]) casingBySubject[k] = String(s).trim();
       if (!typesBySubject[k]) typesBySubject[k] = [];
-      if (type && typesBySubject[k].indexOf(type) === -1) typesBySubject[k].push(type);
+      if (src.type && typesBySubject[k].indexOf(src.type) === -1) typesBySubject[k].push(src.type);
     });
+    var ck = creatorKey(src.creator);
+    if (ck) creators[ck] = (creators[ck] || 0) + weight;
+    if (src.year != null) {
+      var d = Math.floor(src.year / 10) * 10;
+      decades[d] = (decades[d] || 0) + weight;
+    }
   }
-  Object.keys(state.history).forEach(function (id) {
-    var h = state.history[id];
+  /* History, one signal per title at its strongest entry. */
+  var byId = {};
+  Object.keys(state.history).forEach(function (k) {
+    var h = state.history[k];
     if (isAdultEntry(h)) return;
     /* An old entry with no flag and no subjects cannot be told
        from its own data; the identity gate catches it when the
        adult pool has loaded. */
     if (adultPoolSet && isInAdultPool(h.title, storedYear(h))) return;
-    if (h.progress >= 1) addSubjects(h.subjects, 1, h.type, h.title);
-    else if (h.progress > 0) addSubjects(h.subjects, 0.5, h.type, h.title);
+    var w = engagementWeight(h);
+    if (!w) return;
+    var cur = byId[h.id];
+    if (!cur || w > cur.weight) {
+      byId[h.id] = { weight: w, title: h.title, subjects: h.subjects,
+        creator: h.creator || "", year: storedYear(h), type: h.type };
+    }
   });
-  /* Reactions never stored an adult field, so an old reaction on
-     an adult title would seed normal rows. Skip reactions whose
-     title is flagged adult in history, or matches the adult pool. */
+  Object.keys(byId).forEach(function (id) { add(byId[id], byId[id].weight); });
+  /* Likes, a full positive each, stacked on any watch weight. */
   var adultHistoryIds = {};
-  Object.keys(state.history).forEach(function (id) {
-    var h = state.history[id];
+  Object.keys(state.history).forEach(function (k) {
+    var h = state.history[k];
     if (isAdultEntry(h)) adultHistoryIds[h.id] = true;
   });
+  var likedById = {};
   Object.keys(state.reactions).forEach(function (id) {
     var r = state.reactions[id];
     if (r.value !== 1) return;
+    /* Reactions never stored an adult field, so an old reaction on
+       an adult title would seed normal rows. Skip reactions whose
+       title is flagged adult in history, or matches the adult pool. */
     if (isAdultItem(r)) return;
     if (adultHistoryIds[id]) return;
     if (adultPoolSet && isInAdultPool(r.title, r.year)) return;
-    addSubjects(r.subjects, 2, r.type, r.title);
+    likedById[id] = r;
+    add(r, POS_WEIGHT);
   });
-  return Object.keys(counts)
-    .filter(function (k) { return GENERIC_SUBJECT_STOPLIST.indexOf(k) === -1 && k.length > 2 && k.length < 40; })
-    .sort(function (a, b) { return counts[b] - counts[a]; })
+  /* Star ratings. Ratings store no subjects, so the weight lands
+     through the title's history or like record; a rated title
+     with neither adds nothing, there is nothing to attribute. */
+  Object.keys(state.ratings || {}).forEach(function (id) {
+    var r = state.ratings[id];
+    if (!r || !r.value) return;
+    var src = byId[id] || likedById[id];
+    if (!src) return;
+    add({ title: r.title, subjects: src.subjects, creator: src.creator,
+      year: r.year, type: r.type }, ratingWeight(r.value));
+  });
+  var empty = !Object.keys(subjects).some(function (k) { return subjects[k] > 0; });
+  return {
+    subjects: subjects, creators: creators, decades: decades,
+    typesBySubject: typesBySubject, casingBySubject: casingBySubject,
+    signals: signals, empty: empty,
+    lead: signals >= PROFILE_TRUSTED ? 1 : (signals >= PROFILE_MIN_SIGNALS ? 0.5 : 0)
+  };
+}
+
+/* How strongly one candidate matches the measured taste: its
+   subjects' taste weights (each capped, so one dominant genre
+   cannot swamp the rest), plus its director's weight at three
+   quarters and its decade's at half. 0 for an empty profile, so
+   ranking falls back to seed similarity and popularity alone. */
+var TASTE_SUBJECT_CAP = 6;
+function tasteScoreOf(it, taste) {
+  if (!it || !taste || taste.empty) return 0;
+  var score = 0;
+  var seen = {};
+  (it.subjects || []).forEach(function (s) {
+    var k = String(s).toLowerCase();
+    if (seen[k]) return;
+    seen[k] = true;
+    var w = taste.subjects[k] || 0;
+    if (w > 0) score += Math.min(w, TASTE_SUBJECT_CAP);
+  });
+  var ck = creatorKey(it.creator);
+  if (ck && (taste.creators[ck] || 0) > 0) {
+    score += Math.min(taste.creators[ck], TASTE_SUBJECT_CAP) * 0.75;
+  }
+  if (it.year != null) {
+    var dw = taste.decades[Math.floor(it.year / 10) * 10] || 0;
+    if (dw > 0) score += Math.min(dw, TASTE_SUBJECT_CAP) * 0.5;
+  }
+  return score;
+}
+
+/* The user's strongest taste subjects, from the measured taste
+   profile: the top two subjects with the types of the items
+   that seeded them, so a user who only watches shows gets show
+   rows, not movie rows. The returned subject keeps the casing
+   it was stored with, so the row label reads "Drama", not
+   "drama". */
+function topSignalSubjects() {
+  var taste = tasteProfile();
+  return Object.keys(taste.subjects)
+    .filter(function (k) { return taste.subjects[k] > 0 && GENERIC_SUBJECT_STOPLIST.indexOf(k) === -1 && k.length > 2 && k.length < 40; })
+    .sort(function (a, b) { return taste.subjects[b] - taste.subjects[a]; })
     .slice(0, 2)
     .map(function (k) {
-      return { subject: casingBySubject[k] || k, key: k, types: typesBySubject[k] || ["movie"] };
+      return { subject: taste.casingBySubject[k] || k, key: k, types: taste.typesBySubject[k] || ["movie"] };
     });
 }
 
@@ -5143,6 +5504,104 @@ function topSignalSubjects() {
 function capitalizeFirst(s) {
   s = String(s == null ? "" : s);
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+/* Exploration candidates for a personalized row: popular
+   titles outside the profile's top subjects. Survivors outside
+   the top decades come first, then the rest, each group in the
+   day's rotated order, so exploration is a calculation too,
+   never a dice roll. The caller passes items already filtered
+   the way row items are (watched, not-for-me and seed titles
+   out). An empty taste profile explores nothing. */
+function exploreCandidates(items, taste, salt, day) {
+  if (!taste || taste.empty) return [];
+  var topSubjects = Object.keys(taste.subjects)
+    .filter(function (k) { return taste.subjects[k] > 0; })
+    .sort(function (a, b) { return taste.subjects[b] - taste.subjects[a]; })
+    .slice(0, 4);
+  var topDecades = Object.keys(taste.decades)
+    .filter(function (k) { return taste.decades[k] > 0; })
+    .sort(function (a, b) { return taste.decades[b] - taste.decades[a]; })
+    .slice(0, 2)
+    .map(function (k) { return Number(k); });
+  var eraOut = [];
+  var eraIn = [];
+  (items || []).forEach(function (it) {
+    var sharesTop = (it.subjects || []).some(function (s) {
+      return topSubjects.indexOf(String(s).toLowerCase()) !== -1;
+    });
+    if (sharesTop) return;
+    if (it.year != null && topDecades.indexOf(Math.floor(it.year / 10) * 10) === -1) eraOut.push(it);
+    else eraIn.push(it);
+  });
+  return dailyShuffle(eraOut, salt + ":explore-era", day)
+    .concat(dailyShuffle(eraIn, salt + ":explore", day));
+}
+
+/* How many of a full row's slots exploration gets. */
+function exploreSlotCount(total) {
+  return Math.round(total * EXPLORE_SHARE);
+}
+
+/* Weave exploration picks into a row at evenly spread slots
+   (a Bresenham style spread, so they never clump), exploit
+   picks everywhere else. When the exploit side runs out,
+   exploration backfills; when exploration runs out, the row is
+   exploit only. */
+function interleaveExplore(exploit, explore) {
+  var total = Math.min(ROW_SIZE, exploit.length + explore.length);
+  var exploreWanted = Math.min(explore.length, exploreSlotCount(total));
+  var out = [];
+  var ei = 0;
+  var xi = 0;
+  for (var slot = 0; slot < total; slot++) {
+    var isExploreSlot = Math.floor((slot + 1) * exploreWanted / total) >
+      Math.floor(slot * exploreWanted / total);
+    if (isExploreSlot && xi < explore.length) out.push(explore[xi++]);
+    else if (ei < exploit.length) out.push(exploit[ei++]);
+    else if (xi < explore.length) out.push(explore[xi++]);
+  }
+  return out;
+}
+
+/* Compose one "Because you watched" row: mostly the profile's
+   measured taste, re-ranked for diversity, with the exploration
+   share of slots filled from outside the top subjects. Exploit
+   relevance blends taste with popularity by how far the profile
+   may lead (below PROFILE_MIN_SIGNALS the blend is all
+   popularity, today's behaviour; at PROFILE_TRUSTED it is all
+   taste). Exploit picks are chosen by MMR over that relevance.
+   Exploration picks never duplicate an exploit pick, by id or
+   by the same-film rule. When either side runs short the other
+   backfills, so the row is never shorter than the material
+   allows. Pure, so the node test can drive it. */
+function composeBecauseRow(candidates, explore, taste) {
+  var pool = candidates || [];
+  if (!pool.length) return [];
+  var lead = taste ? (taste.lead || 0) : 0;
+  var raw = pool.map(function (it) { return tasteScoreOf(it, taste); });
+  var maxRaw = Math.max.apply(null, raw.concat([0]));
+  var n = pool.length;
+  var scored = pool.map(function (it, i) {
+    var tasteRel = maxRaw > 0 ? raw[i] / maxRaw : 0;
+    var popRel = 1 - i / n;
+    return { item: it, rel: lead * tasteRel + (1 - lead) * popRel };
+  });
+  var exploreCount = Math.min((explore || []).length, exploreSlotCount(ROW_SIZE));
+  var exploit = mmrPick(scored, ROW_SIZE - exploreCount);
+  var usedIds = {};
+  var usedKeys = {};
+  exploit.forEach(function (it) {
+    usedIds[it.id] = true;
+    var dk = dedupeKey(it);
+    if (dk) usedKeys[dk] = true;
+  });
+  var explorePool = (explore || []).filter(function (it) {
+    if (usedIds[it.id]) return false;
+    var dk = dedupeKey(it);
+    return !dk || !usedKeys[dk];
+  });
+  return interleaveExplore(exploit, explorePool);
 }
 
 function renderPersonalShelves(container) {
@@ -5162,6 +5621,7 @@ function renderPersonalShelves(container) {
   }
   var subjects = topSignalSubjects();
   var seeds = seedDedupeKeys();
+  var taste = tasteProfile();
   subjects.forEach(function (sig) {
     var s3 = rowEl("Because you watched " + capitalizeFirst(sig.subject), "Picked from what you watch and like");
     s3.classList.add("personal-shelf");
@@ -5171,17 +5631,31 @@ function renderPersonalShelves(container) {
       '<div class="skeleton-card"></div><div class="skeleton-card"></div></div>';
     /* The row matches the seeded items' types, not movies only.
        Watched and liked titles are excluded by dedupe key, so
-       the row never recommends the seed title itself. */
-    searchArchive(typeQueryForTypes(sig.types) + ' AND subject:"' + sig.subject.replace(/"/g, "") + '"',
-      { rows: 30, sort: "downloads desc", type: sig.types.length === 1 ? sig.types[0] : undefined })
-      .then(function (res) {
-        var items = filterNotForMe(filterVisible(res.items)).filter(function (it) {
+       the row never recommends the seed title itself. The fill
+       is composed from the measured taste: mostly exploitation
+       of it, re-ranked for diversity, with the exploration
+       share drawn from popular titles of the same types outside
+       the profile's top subjects. A failed exploration fetch
+       just means an exploit-only row. */
+    var rowType = sig.types.length === 1 ? sig.types[0] : undefined;
+    var baseQuery = typeQueryForTypes(sig.types);
+    var rowSearch = searchArchive(baseQuery + ' AND subject:"' + sig.subject.replace(/"/g, "") + '"',
+      { rows: 60, sort: "downloads desc", type: rowType });
+    var exploreSearch = searchArchive(baseQuery,
+      { rows: 120, sort: "downloads desc", type: rowType })
+      .then(function (r) { return r; }, function () { return { items: [] }; });
+    Promise.all([rowSearch, exploreSearch]).then(function (both) {
+      function usable(items) {
+        return filterNotForMe(filterVisible(items)).filter(function (it) {
           var dk = dedupeKey(it);
           return !dk || !seeds[dk];
-        }).slice(0, ROW_SIZE);
-        if (!items.length) { s3.remove(); return; }
-        fillRow(s3, items);
-      }).catch(function () { s3.remove(); });
+        });
+      }
+      var candidates = usable(both[0].items);
+      if (!candidates.length) { s3.remove(); return; }
+      var explore = exploreCandidates(usable(both[1].items), taste, sig.key);
+      fillRow(s3, composeBecauseRow(candidates, explore, taste));
+    }).catch(function () { s3.remove(); });
   });
 }
 
@@ -5970,7 +6444,7 @@ function openDetails(item, opts) {
              unrelated modern musical into this row. Deduped by
              the same-film rule, so two uploads of one film never
              take two slots. */
-          var sims = dedupeItems(filterNotForMe(rankSimilar(fullItem, filterVisible(res.items))))
+          var sims = dedupeItems(filterNotForMe(rankSimilar(fullItem, filterVisible(res.items), tasteProfile())))
             .slice(0, 12);
           if (!sims.length) {
             similarRow.innerHTML = '<p class="row-error">No close matches found.</p>';
@@ -9200,6 +9674,26 @@ if (typeof module !== "undefined" && module.exports) {
     continueWatchingItems: continueWatchingItems,
     watchAgainItems: watchAgainItems,
     topSignalSubjects: topSignalSubjects,
+    dayNumber: dayNumber,
+    dailyShuffle: dailyShuffle,
+    dailyWindow: dailyWindow,
+    dailySlice: dailySlice,
+    mmrPick: mmrPick,
+    pickSimilarity: pickSimilarity,
+    engagementWeight: engagementWeight,
+    ratingWeight: ratingWeight,
+    tasteProfile: tasteProfile,
+    tasteScoreOf: tasteScoreOf,
+    exploreCandidates: exploreCandidates,
+    exploreSlotCount: exploreSlotCount,
+    interleaveExplore: interleaveExplore,
+    composeBecauseRow: composeBecauseRow,
+    ROW_POOL: ROW_POOL,
+    EXPLORE_SHARE: EXPLORE_SHARE,
+    MMR_LAMBDA: MMR_LAMBDA,
+    DIVERSITY_TARGET: DIVERSITY_TARGET,
+    PROFILE_MIN_SIGNALS: PROFILE_MIN_SIGNALS,
+    PROFILE_TRUSTED: PROFILE_TRUSTED,
     myListItems: myListItems,
     historyEntries: historyEntries,
     defaultState: defaultState,

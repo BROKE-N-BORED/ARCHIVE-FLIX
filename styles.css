@@ -329,6 +329,12 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   z-index: 2;
   padding: 32px 40px 72px;
   max-width: 760px;
+  /* A flex item's automatic minimum is its min-content, and a
+     description carrying an unbroken URL (Archive descriptions
+     often do) would stretch the whole hero past the screen,
+     title and buttons with it. Shrink below min-content and
+     let the text break instead. */
+  min-width: 0;
 }
 /* The fallback hero (catalog failed, no backdrop) shrinks to its
    content instead of holding the full hero height as an empty slab.
@@ -449,6 +455,11 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
 
 /* Expandable descriptions */
 .hero .desc-wrap { margin: 0 0 18px; }
+/* Archive descriptions often embed raw URLs and other unbroken
+   tokens; without this they force their container wide (in the
+   hero, a flex row, that dragged the title and buttons off
+   screen). Break them anywhere rather than widening the layout. */
+.desc-text { overflow-wrap: anywhere; }
 .desc-text.clamped {
   display: -webkit-box;
   -webkit-line-clamp: 3;
