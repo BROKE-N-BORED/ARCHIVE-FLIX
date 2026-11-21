@@ -144,6 +144,32 @@
     </div>
   </section>
 
+  <!-- GENRE -->
+  <section id="genreView" class="view" aria-label="Genre">
+    <div class="browse-head">
+      <button class="btn btn-ghost" id="genreBack" type="button">Back</button>
+      <h1 id="genreTitle">Genre</h1>
+      <p class="sub">The whole genre, loaded in chunks. Nothing here loads all at once.</p>
+    </div>
+    <div class="filter-row">
+      <label>Sort
+        <select id="genreSort">
+          <option value="year-desc">Release year, newest first</option>
+          <option value="year-asc">Release year, oldest first</option>
+          <option value="downloads">Most downloaded</option>
+          <option value="rated">Top rated</option>
+          <option value="az">Title A to Z</option>
+        </select>
+      </label>
+    </div>
+    <div id="genreSubChips" class="chips" aria-label="Sub-genres"></div>
+    <p id="genreCount" class="browse-count" aria-live="polite"></p>
+    <div id="genreGrid" class="grid"></div>
+    <div class="loadmore-wrap">
+      <button class="btn btn-primary" id="genreMoreBtn" style="display:none">Load more</button>
+    </div>
+  </section>
+
   <!-- MY LIST -->
   <section id="myListView" class="view" aria-label="My List">
     <div class="browse-head">
@@ -216,6 +242,14 @@
       <label class="hidewatched">
         <input type="checkbox" id="autoAdvanceToggle">
         <span>Play the next episode automatically</span>
+      </label>
+    </div>
+
+    <h2 class="section-title">Language</h2>
+    <p class="sub">Descriptions are written by uploaders in many languages. Pick the language you want to read them in: when a description is in another language, it is translated for display when translation is available, and a note under the text says so. Subtitle tracks in the player prefer this language too. Movie and show titles are never translated.</p>
+    <div class="key-row">
+      <label>Language for descriptions and subtitles
+        <select id="readLangSelect" aria-label="Language for descriptions and subtitles"></select>
       </label>
     </div>
 

@@ -21,14 +21,14 @@ var API = "https://archive.org/advancedsearch.php";
 var META_API = "https://archive.org/metadata/";
 /* The release version, shown in Settings About. Bump with each
    release alongside the service worker cache version. */
-var APP_VERSION = "1.6.3";
+var APP_VERSION = "1.6.4";
 var STORE_KEY = "archiveflix.v1";
 var PROFILES_KEY = "archiveflix.profiles.v1";
 var MAX_PROFILES = 5;
 var PROFILE_COLORS = ["#f0b429", "#3b82f6", "#22c55e", "#a855f7", "#ef4444"];
 /* Fields that belong to one profile. API keys and the OMDb ratings
    cache stay device level, shared across profiles. */
-var PROFILE_FIELDS = ["history", "myList", "reactions", "ratings", "hideWatched", "theme", "customAccent", "adultEnabled", "density", "autoAdvance"];
+var PROFILE_FIELDS = ["history", "myList", "reactions", "ratings", "hideWatched", "theme", "customAccent", "adultEnabled", "density", "autoAdvance", "readLang", "behavior"];
 var DEVICE_FIELDS = ["omdbKey", "omdbCache", "tmdbKey"];
 var ROW_SIZE = 24;
 /* History keeps the newest 1000 entries, pruning the oldest
@@ -39,6 +39,43 @@ var ROW_SIZE = 24;
    first load, before the functions below run. */
 var HISTORY_MAX_ENTRIES = 1000;
 var OMDB_CACHE_MAX = 200;
+/* Behavior analytics (v1.6.4): at most this many titles carry
+   view and click counts per profile, pruned by most recent. */
+var BEHAVIOR_MAX_ENTRIES = 300;
+
+/* Reading languages for descriptions and subtitles (v1.6.4).
+   Defined this early because profile sanitising validates the
+   saved choice against the list at load. Titles are never
+   translated; this list is for description text and subtitle
+   track preference only. */
+var READ_LANGS = [
+  { code: "en", name: "English" },
+  { code: "es", name: "Spanish" },
+  { code: "fr", name: "French" },
+  { code: "de", name: "German" },
+  { code: "it", name: "Italian" },
+  { code: "pt", name: "Portuguese" },
+  { code: "nl", name: "Dutch" },
+  { code: "pl", name: "Polish" },
+  { code: "sv", name: "Swedish" },
+  { code: "tr", name: "Turkish" },
+  { code: "ru", name: "Russian" },
+  { code: "uk", name: "Ukrainian" },
+  { code: "ar", name: "Arabic" },
+  { code: "hi", name: "Hindi" },
+  { code: "ja", name: "Japanese" },
+  { code: "ko", name: "Korean" },
+  { code: "zh-CN", name: "Chinese (Simplified)" },
+  { code: "id", name: "Indonesian" }
+];
+var READ_LANG_CODES = READ_LANGS.map(function (l) { return l.code; });
+
+function readLangName(code) {
+  for (var i = 0; i < READ_LANGS.length; i++) {
+    if (READ_LANGS[i].code === code) return READ_LANGS[i].name;
+  }
+  return code || "";
+}
 
 /* Adult 18+ section. The Archive's own subject tags decide what is
    adult, plus title phrases that are adult or child-safety signals
@@ -73,11 +110,32 @@ var OMDB_CACHE_MAX = 200;
    Happiness), "nude" (would move a BBC Duchamp interview),
    "naked" (would move The Naked City, The Naked Street, The
    Naked Kiss and The Naked Island), "sexy" (uploaders tag even a
-   1951 family drama with it). */
+   1951 family drama with it).
+   The 2026-11-20 additions ("nudie cutie", "nudie-cutie",
+   "porno") name the nudie-cutie genre and the porno tag
+   directly: every sampled title is a genuine adult genre film
+   (Nude on the Moon, Dr. Sex, Goldilocks and the Three Bares,
+   Wild Gals of the Naked West; Le Notti Porno Nel Mondo,
+   Policewoman on the Porno Squad). Measured live that day, the
+   feature_films pool union did not grow (150 titles before and
+   after): each of those titles was already caught by another
+   tag or a title phrase, so the additions sharpen the Nudie
+   row's own query and the client side subject check rather than
+   widening the pool. Checked the same day and NOT added:
+   "pornography" (its one feature_films match is a hate
+   propaganda documentary about the topic, not an adult film),
+   "hardcore" (a techno music video), "cheesecake" (a Joan
+   Blondell biography item), "pin-up" (Pin Up Girl, 1944, a
+   mainstream musical, and the same biography), "x-rated" and
+   "adult animation" (one match between them, Tarzoon, already
+   in the pool). "burlesque" and "nudity" were re-sampled the
+   same day and are still mainstream (Lady of Burlesque, A
+   Burlesque on Carmen, Lone Wolf and Cub, One Summer of
+   Happiness), so the 2026-11-17 rejections stand. */
 var ADULT_SUBJECTS = ["adult", "erotica", "erotic", "sexploitation",
   "softcore", "nudie", "nudist", "sex", "adults only", "sex comedy",
   "stripper", "strippers", "stag", "mondo", "child molester",
-  "child molestation"];
+  "child molestation", "nudie cutie", "nudie-cutie", "porno"];
 /* Title phrases that are adult or child-safety signals wherever
    they appear in a title, not just as the whole title: "child
    molester" and "jail bait" name the subject matter itself, and no
@@ -1792,7 +1850,9 @@ function defaultProfileData() {
     customAccent: "",
     adultEnabled: false,
     density: "comfortable",
-    autoAdvance: true
+    autoAdvance: true,
+    readLang: "en",
+    behavior: {}
   };
 }
 
@@ -1827,6 +1887,43 @@ function sanitizeProfileData(d) {
   if (typeof out.adultEnabled !== "boolean") out.adultEnabled = false;
   if (out.density !== "compact" && out.density !== "comfortable") out.density = "comfortable";
   if (typeof out.autoAdvance !== "boolean") out.autoAdvance = true;
+  if (READ_LANG_CODES.indexOf(out.readLang) === -1) out.readLang = "en";
+  out.behavior = sanitizeBehavior(out.behavior);
+  return out;
+}
+
+/* Behavior analytics entries, validated: a map of item id to
+   {t title, s subjects, c creator, y year, ty type, a adult,
+   v views, k clicks, last timestamp}. Anything malformed is
+   dropped, counts are floored at zero, and the map is pruned to
+   the most recent BEHAVIOR_MAX_ENTRIES titles, so a damaged or
+   hand-edited store can never grow it without bound. Pure, so
+   the node test can drive it. */
+function sanitizeBehavior(b) {
+  var out = {};
+  if (!b || typeof b !== "object") return out;
+  var keys = Object.keys(b);
+  var entries = [];
+  keys.forEach(function (id) {
+    var e = b[id];
+    if (!e || typeof e !== "object") return;
+    var v = Math.floor(Number(e.v) || 0);
+    var k = Math.floor(Number(e.k) || 0);
+    if (v < 0) v = 0;
+    if (k < 0) k = 0;
+    entries.push([id, {
+      t: typeof e.t === "string" ? e.t.slice(0, 200) : "",
+      s: Array.isArray(e.s) ? e.s.filter(function (s) { return typeof s === "string"; }).slice(0, 12) : [],
+      c: typeof e.c === "string" ? e.c.slice(0, 120) : "",
+      y: (typeof e.y === "number" && isFinite(e.y)) ? e.y : null,
+      ty: typeof e.ty === "string" ? e.ty : "",
+      a: e.a === true,
+      v: v, k: k,
+      last: (typeof e.last === "number" && isFinite(e.last)) ? e.last : 0
+    }]);
+  });
+  entries.sort(function (a, c) { return c[1].last - a[1].last; });
+  entries.slice(0, BEHAVIOR_MAX_ENTRIES).forEach(function (pair) { out[pair[0]] = pair[1]; });
   return out;
 }
 
@@ -4436,7 +4533,10 @@ function cardEl(item, opts) {
     upgradePoster(posterImg, item, "card");
     guardThumbnail(posterImg, item, "card");
   }
-  btn.addEventListener("click", function () { openDetails(item, { adultContext: adultCtx }); });
+  btn.addEventListener("click", function () {
+    recordBehavior(item, "click", adultCtx);
+    openDetails(item, { adultContext: adultCtx });
+  });
   return btn;
 }
 
@@ -4587,6 +4687,25 @@ function fillRow(section, items, emptyText, opts) {
     scroll.appendChild(card);
   });
   updateRowArrows(section.querySelector(".row-viewport"));
+}
+
+/* Make a genre row's title open the Genre view for that genre,
+   leaving the carousel itself exactly as it was. Only genre
+   rows get the treatment, and the title becomes a real button
+   so it is tappable and keyboard reachable. */
+function linkRowTitle(section, spec) {
+  if (!section || !spec) return;
+  var h = section.querySelector(".row-head h2");
+  if (!h || h.querySelector("button")) return;
+  var title = h.textContent;
+  h.textContent = "";
+  var btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "row-title-btn";
+  btn.textContent = title + " ›";
+  btn.setAttribute("aria-label", "Open the full " + spec.label + " genre");
+  btn.addEventListener("click", function () { openGenreView(spec); });
+  h.appendChild(btn);
 }
 
 function rowError(section, retry) {
@@ -4841,17 +4960,31 @@ function dailySlice(items, salt, day) {
 var ROW_DEFS = [
   { id: "trending",  title: "Trending Now", q: MOVIES, sort: "downloads desc", skipNoYear: true },
   { id: "toprated",  title: "Top Rated", q: MOVIES, sort: "downloads desc", rows: 100, byRating: true, skipNoYear: true },
-  { id: "horror",    title: "Horror", q: MOVIES + " AND subject:horror", sort: "downloads desc" },
-  { id: "comedy",    title: "Comedy", q: MOVIES + " AND subject:comedy", sort: "downloads desc" },
-  { id: "scifi",     title: "Sci-Fi", q: MOVIES + ' AND subject:"science fiction"', sort: "downloads desc" },
-  { id: "thriller",  title: "Thriller", q: MOVIES + " AND subject:thriller", sort: "downloads desc" },
+  /* Recent decades sit high on Home on purpose (v1.6.4): the
+     catalog is mostly classics, and a downloads ranked home
+     page buried the newer slice entirely. Membership is by the
+     corrected release year (the yearRange filter in loadRow
+     reads the derived year, never the upload year), and the
+     rows rotate daily like every other row. Pool sizes verified
+     live 2026-11-20: the 2000s and newer clause matches about
+     2,640 titles and the 80s and 90s clause about 1,880, and
+     over 9 in 10 of the top 240 downloads survive the derived
+     year filter, so both rows fill from the standard pool. */
+  { id: "new2000s",  title: "2000s and Newer", q: MOVIES + " AND " + yearClauseRange(2000, DERIVED_YEAR_MAX), sort: "downloads desc", yearRange: [2000, DERIVED_YEAR_MAX] },
+  { id: "eighties90s", title: "80s and 90s", q: MOVIES + " AND " + yearClauseRange(1980, 1999), sort: "downloads desc", yearRange: [1980, 1999] },
+  { id: "horror",    title: "Horror", q: MOVIES + " AND subject:horror", sort: "downloads desc", genre: "horror" },
+  { id: "comedy",    title: "Comedy", q: MOVIES + " AND subject:comedy", sort: "downloads desc", genre: "comedy" },
+  { id: "scifi",     title: "Sci-Fi", q: MOVIES + ' AND subject:"science fiction"', sort: "downloads desc", genre: "scifi" },
+  { id: "thriller",  title: "Thriller", q: MOVIES + " AND subject:thriller", sort: "downloads desc", genre: "thriller" },
   { id: "plottwist", title: "Plot Twist", subtitle: "Mysteries and thrillers where nothing is what it seems",
-    q: MOVIES + " AND subject:(mystery OR thriller)", sort: "downloads desc" },
-  { id: "noir",      title: "Film Noir", q: MOVIES + ' AND subject:"film noir"', sort: "downloads desc" },
-  { id: "westerns",  title: "Westerns", q: MOVIES + " AND subject:western", sort: "downloads desc" },
+    q: MOVIES + " AND subject:(mystery OR thriller)", sort: "downloads desc",
+    genreSpec: { label: "Plot Twist", q: MOVIES + " AND subject:(mystery OR thriller)" } },
+  { id: "noir",      title: "Film Noir", q: MOVIES + ' AND subject:"film noir"', sort: "downloads desc", genre: "noir" },
+  { id: "westerns",  title: "Westerns", q: MOVIES + " AND subject:western", sort: "downloads desc", genre: "western" },
   { id: "shows",     title: "Shows", q: "collection:classic_tv", sort: "downloads desc", type: "show" },
   { id: "cartoons",  title: "Cartoons", special: "cartoons" },
-  { id: "animation", title: "Animation", q: "mediatype:movies AND subject:cartoons", sort: "downloads desc", type: "cartoon", noYoutube: true },
+  { id: "animation", title: "Animation", q: "mediatype:movies AND subject:cartoons", sort: "downloads desc", type: "cartoon", noYoutube: true,
+    genreSpec: { label: "Animation", q: "mediatype:movies AND subject:cartoons", type: "cartoon", noYoutube: true } },
   { id: "new",       title: "Newly Added", q: MOVIES, sort: "addeddate desc", noRotate: true },
   { id: "golden",    title: "Golden Age 1930s", q: MOVIES + " AND " + yearClauseRange(1930, 1939), sort: "downloads desc", yearRange: [1930, 1939] },
   { id: "silent",    title: "Silent Era", q: MOVIES + " AND " + yearClauseRange(1890, 1929), sort: "downloads desc", yearRange: [1890, 1929] },
@@ -5098,6 +5231,7 @@ function renderHero(item) {
   document.getElementById("heroPlay").addEventListener("click", function () { openPlayer(resolvePlayTarget(item)); });
   document.getElementById("heroDetails").addEventListener("click", function () { openDetails(item); });
   wireExpandableDescs(hero);
+  applyDescriptionLanguage(hero, item.description);
 }
 
 /* Home shelves show only non-adult titles. The 18+ section calls
@@ -5321,6 +5455,71 @@ var PROFILE_TRUSTED = 10;     /* weighted signals before the profile
                                  implicit only profiles, so this one is
                                  an inference, flagged as one) */
 
+/* ---------- Behavior analytics ---------- */
+/* What a profile looked at and clicked, not just what it
+   watched (v1.6.4). A card click and a details view are
+   implicit feedback: real evidence of interest, and much
+   weaker than watching. The shape follows the implicit
+   feedback framing of Hu, Koren and Volinsky (2008): repeated
+   events raise confidence on a log curve, so the tenth view
+   of a title adds far less than the first, and the per-title
+   cap keeps any amount of browsing below one finish
+   (POS_WEIGHT), so a view with no watch behind it can never
+   outweigh a finish. The coefficients are build judgments,
+   stated as such; the literature gives the shape and the
+   ordering (finish, then view, then click), not these numbers.
+   Everything stays in the profile's own store on this device:
+   nothing is uploaded and no network call is ever made for
+   analytics. Adult entries are flagged as they are recorded
+   and feed only the 18+ taste profile, never the normal one. */
+var VIEW_WEIGHT = 0.3;
+var CLICK_WEIGHT = 0.15;
+var BEHAVIOR_WEIGHT_CAP = 0.8;
+
+/* One behavior entry's taste weight: its views and clicks on
+   a log curve, capped below a finish. Pure, so the node test
+   can drive it. */
+function behaviorWeight(e) {
+  if (!e) return 0;
+  var w = VIEW_WEIGHT * Math.log(1 + (e.v || 0)) +
+    CLICK_WEIGHT * Math.log(1 + (e.k || 0));
+  return Math.min(BEHAVIOR_WEIGHT_CAP, w);
+}
+
+/* Record one look or click on a title in the active profile's
+   behavior analytics. The entry snapshots the title's taste
+   attributes (subjects, director, year, type) the way history
+   entries do, and remembers whether the title is adult, from
+   the context it was seen in or its own tags. Saving is
+   deferred (saveStateSoon): analytics are loss tolerant, and
+   a click must never stall on a store write. */
+function recordBehavior(item, kind, adultCtx) {
+  if (!item || !item.id || !state) return;
+  if (kind !== "view" && kind !== "click") return;
+  if (!state.behavior || typeof state.behavior !== "object") state.behavior = {};
+  var e = state.behavior[item.id];
+  if (!e) {
+    e = state.behavior[item.id] = { t: "", s: [], c: "", y: null, ty: "", a: false, v: 0, k: 0, last: 0 };
+  }
+  if (item.title) e.t = String(item.title);
+  if (item.subjects && item.subjects.length) e.s = item.subjects.slice(0, 12);
+  if (item.creator) e.c = String(item.creator);
+  if (item.year != null) e.y = item.year;
+  if (item.type) e.ty = item.type;
+  if (adultCtx || isAdultItem(item)) e.a = true;
+  if (kind === "view") e.v++;
+  else e.k++;
+  e.last = Date.now();
+  var keys = Object.keys(state.behavior);
+  if (keys.length > BEHAVIOR_MAX_ENTRIES) {
+    keys.sort(function (a, b) {
+      return (state.behavior[b].last || 0) - (state.behavior[a].last || 0);
+    });
+    keys.slice(BEHAVIOR_MAX_ENTRIES).forEach(function (k) { delete state.behavior[k]; });
+  }
+  saveStateSoon();
+}
+
 /* The taste weight of one history entry, on the POS_WEIGHT
    scale. A finish is a full positive, plus a log-shaped repeat
    bonus. A substantial partial watch (70 to 90 percent) weighs
@@ -5357,19 +5556,26 @@ function ratingWeight(value) {
 
 /* The profile's measured taste: subject, director and decade
    weights built from finished, re-watched, liked and rated
-   titles, each counted at its engagement weight. Adult titles
-   never contribute (the same guards the old seed picker used).
-   History counts once per title, at its strongest entry, so a
-   show's forty episodes are one strong signal, not forty. A
-   subject that is just the seeding title itself ("twilight zone
-   1959" on The Twilight Zone) is not a taste and is skipped.
-   Also carries the cold start bookkeeping: signals, the total
-   positive weight, and lead, how far personalization may lead
-   (0 below PROFILE_MIN_SIGNALS, 0.5 blended with popularity up
-   to PROFILE_TRUSTED, 1 standing alone). An empty profile has
+   titles, each counted at its engagement weight, plus the
+   behavior analytics (views and clicks at their much smaller
+   behavior weight). Two variants share this one builder and
+   never share a signal: the normal profile takes only
+   non-adult sources, the 18+ profile takes only adult ones,
+   and every source is classified adult or not by the same
+   checks (stored flag, subject tags, the identity pool), so
+   adult behavior cannot leak into normal rows and normal
+   behavior cannot steer the 18+ rows. History counts once per
+   title, at its strongest entry, so a show's forty episodes
+   are one strong signal, not forty. A subject that is just
+   the seeding title itself ("twilight zone 1959" on The
+   Twilight Zone) is not a taste and is skipped. Also carries
+   the cold start bookkeeping: signals, the total positive
+   weight, and lead, how far personalization may lead (0 below
+   PROFILE_MIN_SIGNALS, 0.5 blended with popularity up to
+   PROFILE_TRUSTED, 1 standing alone). An empty profile has
    empty maps and lead 0, and every consumer falls back to
    today's popularity behaviour. */
-function tasteProfile() {
+function tasteProfileFor(adultOnly) {
   var subjects = {};
   var creators = {};
   var decades = {};
@@ -5399,11 +5605,12 @@ function tasteProfile() {
   var byId = {};
   Object.keys(state.history).forEach(function (k) {
     var h = state.history[k];
-    if (isAdultEntry(h)) return;
     /* An old entry with no flag and no subjects cannot be told
        from its own data; the identity gate catches it when the
        adult pool has loaded. */
-    if (adultPoolSet && isInAdultPool(h.title, storedYear(h))) return;
+    var adult = !!(isAdultEntry(h) || isAdultItem(h) ||
+      (adultPoolSet && isInAdultPool(h.title, storedYear(h))));
+    if (adult !== !!adultOnly) return;
     var w = engagementWeight(h);
     if (!w) return;
     var cur = byId[h.id];
@@ -5423,12 +5630,15 @@ function tasteProfile() {
   Object.keys(state.reactions).forEach(function (id) {
     var r = state.reactions[id];
     if (r.value !== 1) return;
-    /* Reactions never stored an adult field, so an old reaction on
-       an adult title would seed normal rows. Skip reactions whose
-       title is flagged adult in history, or matches the adult pool. */
-    if (isAdultItem(r)) return;
-    if (adultHistoryIds[id]) return;
-    if (adultPoolSet && isInAdultPool(r.title, r.year)) return;
+    /* Reactions never stored an adult field, so an old reaction
+       on an adult title would seed normal rows if it were taken
+       at face value. A reaction counts as adult when the title
+       itself is adult tagged, when its history entry is
+       flagged, or when it matches the adult pool; each variant
+       takes only its own side of that line. */
+    var adult = !!(isAdultItem(r) || adultHistoryIds[id] ||
+      (adultPoolSet && isInAdultPool(r.title, r.year)));
+    if (adult !== !!adultOnly) return;
     likedById[id] = r;
     add(r, POS_WEIGHT);
   });
@@ -5443,6 +5653,22 @@ function tasteProfile() {
     add({ title: r.title, subjects: src.subjects, creator: src.creator,
       year: r.year, type: r.type }, ratingWeight(r.value));
   });
+  /* Behavior analytics: titles this profile looked at or
+     clicked, at their behavior weight. Entries recorded in the
+     18+ section are flagged as they are written; entries whose
+     title is adult by its own tags or the identity pool count
+     as adult too, so neither variant can pick up the other's
+     browsing. */
+  Object.keys(state.behavior || {}).forEach(function (id) {
+    var e = state.behavior[id];
+    if (!e) return;
+    var adult = !!(e.a === true ||
+      isAdultItem({ id: id, title: e.t, subjects: e.s }) ||
+      (adultPoolSet && isInAdultPool(e.t, e.y)));
+    if (adult !== !!adultOnly) return;
+    add({ title: e.t, subjects: e.s, creator: e.c, year: e.y, type: e.ty },
+      behaviorWeight(e));
+  });
   var empty = !Object.keys(subjects).some(function (k) { return subjects[k] > 0; });
   return {
     subjects: subjects, creators: creators, decades: decades,
@@ -5451,6 +5677,13 @@ function tasteProfile() {
     lead: signals >= PROFILE_TRUSTED ? 1 : (signals >= PROFILE_MIN_SIGNALS ? 0.5 : 0)
   };
 }
+
+/* The normal taste profile: adult titles never contribute. */
+function tasteProfile() { return tasteProfileFor(false); }
+
+/* The 18+ taste profile: only adult behavior contributes, and
+   it is read only inside the unlocked section. */
+function adultTasteProfile() { return tasteProfileFor(true); }
 
 /* How strongly one candidate matches the measured taste: its
    subjects' taste weights (each capped, so one dominant genre
@@ -5486,8 +5719,8 @@ function tasteScoreOf(it, taste) {
    rows, not movie rows. The returned subject keeps the casing
    it was stored with, so the row label reads "Drama", not
    "drama". */
-function topSignalSubjects() {
-  var taste = tasteProfile();
+function topSignalSubjects(tasteOverride) {
+  var taste = tasteOverride || tasteProfile();
   return Object.keys(taste.subjects)
     .filter(function (k) { return taste.subjects[k] > 0 && GENERIC_SUBJECT_STOPLIST.indexOf(k) === -1 && k.length > 2 && k.length < 40; })
     .sort(function (a, b) { return taste.subjects[b] - taste.subjects[a]; })
@@ -5675,6 +5908,8 @@ function loadHome() {
     }
     var section = rowEl(def.title, subtitle);
     container.appendChild(section);
+    var homeGenreSpec = genreSpecForRowDef(def);
+    if (homeGenreSpec) linkRowTitle(section, homeGenreSpec);
     var scroll = section.querySelector(".row-scroll");
     scroll.innerHTML = '<div class="skeleton-row"><div class="skeleton-card"></div>' +
       '<div class="skeleton-card"></div><div class="skeleton-card"></div></div>';
@@ -6043,6 +6278,9 @@ function runBrowse(reset) {
     browseState.start = 0;
     browseState.seenFilms = [];
     browseState.adultFiltered = 0;
+    browseState.yearPool = null;
+    browseState.yearShown = 0;
+    browseState.yearFetched = 0;
     document.getElementById("browseGrid").innerHTML = "";
   }
   renderSubChips();
@@ -6061,6 +6299,41 @@ function runBrowse(reset) {
   function done() {
     var rerun = browseSequencer.finish();
     if (rerun) runBrowse(rerun === "reset");
+  }
+  /* Year sorts (v1.6.4): the server can only order by its
+     indexed year field, which holds upload years for a share of
+     the catalog, so a year sorted Browse used to page through
+     that scrambled order and only tidy each page as it arrived.
+     Now a year sort fetches one wide candidate pool (the most
+     downloaded YEAR_POOL_MAX matches), runs it through the same
+     filter path as any other page (which ends in the derived
+     year sort), and Load more walks the ordered pool. The order
+     is exact inside the pool; the pool cap is the honest limit,
+     and the count line says when it applies. */
+  if (browseState.sort === "year-desc" || browseState.sort === "year-asc") {
+    if (browseState.yearPool) { appendYearChunk(); done(); return; }
+    searchArchive(browseQuery(), { rows: YEAR_POOL_MAX, sort: "downloads desc" })
+      .then(function (res) {
+        if (browseSequencer.isStale(seq)) { done(); return; }
+        browseState.total = res.total;
+        browseState.adultFiltered = res.adultFiltered || 0;
+        browseState.yearPool = filterBrowseItems(res.items);
+        browseState.yearFetched = res.items.length;
+        browseState.yearShown = 0;
+        appendYearChunk();
+        done();
+      }).catch(function () {
+        if (browseSequencer.isStale(seq)) { done(); return; }
+        document.getElementById("browseCount").textContent = "";
+        var grid = document.getElementById("browseGrid");
+        grid.innerHTML = "";
+        grid.appendChild(emptyStateWithAction(
+          "Could not reach archive.org. Check your connection and try again.",
+          "Retry",
+          function () { runBrowse(true); }));
+        done();
+      });
+    return;
   }
   /* Fetch one page. When client-side filters empty a page that is
      not the last, fetch the next page instead of adding nothing,
@@ -6138,6 +6411,478 @@ function runBrowse(reset) {
   fetchPage(0);
 }
 
+/* Pool sizes for the chunked views (v1.6.4): the Browse year
+   pool and the Genre view pool are candidate metadata, fetched
+   once per search; what the reader sees always arrives in
+   BROWSE_PAGE sized chunks under Load more. */
+var YEAR_POOL_MAX = 1000;
+var BROWSE_PAGE = 48;
+var GENRE_PAGE = 48;
+var GENRE_POOL_MAX = 1000;
+
+/* Append the next chunk of the ordered Browse year pool. The
+   count keeps the same shape as the paged path, plus the
+   release year note the year sorts already carried, plus the
+   pool cap note when the cap is what bounded the order. */
+function appendYearChunk() {
+  var grid = document.getElementById("browseGrid");
+  var pool = browseState.yearPool || [];
+  var chunk = slicePoolPage(pool, browseState.yearShown, BROWSE_PAGE);
+  chunk.forEach(function (it) { grid.appendChild(cardEl(it)); });
+  browseState.yearShown += chunk.length;
+  if (!pool.length && grid.querySelectorAll(".card").length === 0) {
+    grid.innerHTML = "";
+    grid.appendChild(emptyStateWithAction(
+      "Nothing matched those filters. Try a different genre, decade, year or search term.",
+      "Clear filters",
+      function () { document.getElementById("clearFilters").click(); }));
+  }
+  var shown = grid.querySelectorAll(".card").length;
+  var matchTotal = browseMatchTotal(browseState.total, browseState.adultFiltered);
+  var countText = matchTotal + " titles match this search. Showing " + shown +
+    " after your filters. Year order follows the release year.";
+  if (browseState.yearFetched >= YEAR_POOL_MAX && (browseState.total || 0) > browseState.yearFetched) {
+    countText += " Ordered across the most downloaded " + YEAR_POOL_MAX + " matches.";
+  }
+  document.getElementById("browseCount").textContent = countText;
+  document.getElementById("loadMoreBtn").style.display =
+    (shown === 0 || browseState.yearShown >= pool.length) ? "none" : "inline-block";
+}
+
+/* ---------- Genre view ---------- */
+/* A genre row shows one screen of cards; the Genre view is
+   where the whole genre lives. It opens from a genre row's
+   title and pages the genre's catalog in chunks under a Load
+   more button, so the grid never dumps the whole genre at
+   once. Sorting defaults to the corrected release year, newest
+   first, the order the Browse year sorts now guarantee. Adult
+   category rows open the same view behind the same PIN gate as
+   the section itself. */
+
+var genreState = { label: "", q: "", type: undefined, subs: [], sub: "",
+  adult: false, noYoutube: false, sort: "year-desc",
+  pool: null, shown: 0, total: 0, fetched: 0, seq: 0 };
+
+/* Resolve a row definition's genre link into a view spec: a
+   GENRES key takes its label, query and sub-genre chips from
+   the shared map (the same map Browse uses); an inline
+   genreSpec on the definition carries its own. Adult
+   definitions carry genreSpec with adult true. Pure, so the
+   node test can drive it. */
+function genreSpecForRowDef(def) {
+  if (!def) return null;
+  if (def.genreSpec) {
+    return { label: def.genreSpec.label || def.title, q: def.genreSpec.q || def.q,
+      type: def.genreSpec.type || def.type, subs: def.genreSpec.subs || [],
+      adult: !!def.genreSpec.adult, noYoutube: !!def.genreSpec.noYoutube };
+  }
+  if (def.genre && GENRES[def.genre]) {
+    var g = GENRES[def.genre];
+    return { label: g.label, q: MOVIES + " AND subject:" + g.subject,
+      type: undefined, subs: g.subs || [], adult: false, noYoutube: false };
+  }
+  return null;
+}
+
+/* The Genre view's sorts, all client side over the pool: the
+   year sorts use the corrected release year with unknown years
+   last (compareDerivedYear), Top rated the review-weighted
+   score, A to Z the display title. Pure. */
+function sortGenreItems(items, sort) {
+  var copy = (items || []).slice();
+  if (sort === "year-desc") copy.sort(function (a, b) { return compareDerivedYear(a, b, true); });
+  else if (sort === "year-asc") copy.sort(function (a, b) { return compareDerivedYear(a, b, false); });
+  else if (sort === "rated") copy.sort(topRatedSort);
+  else if (sort === "az") copy.sort(function (a, b) {
+    return String(a.title || "").localeCompare(String(b.title || ""));
+  });
+  else if (sort === "downloads") copy.sort(function (a, b) { return (b.downloads || 0) - (a.downloads || 0); });
+  return copy;
+}
+
+/* One chunk of a sorted pool: the slice a Load more appends.
+   Pure, so the node test can drive the paging; the same slicer
+   serves the Browse year pool and the Genre view. */
+function slicePoolPage(pool, offset, size) {
+  return (pool || []).slice(offset, offset + size);
+}
+
+function openGenreView(spec) {
+  if (!spec) return;
+  if (spec.adult && adultAccess(activeProfile(), adultUnlocked) !== "ok") {
+    /* The adult genre view lives behind the same PIN gate as
+       the section itself; it opens only from inside the
+       unlocked section. */
+    toast("Open the 18+ section first.");
+    return;
+  }
+  genreState = { label: spec.label, q: spec.q, type: spec.type,
+    subs: spec.subs || [], sub: "", adult: !!spec.adult,
+    noYoutube: !!spec.noYoutube, sort: "year-desc",
+    pool: null, shown: 0, total: 0, fetched: 0, seq: genreState.seq + 1 };
+  document.getElementById("genreTitle").textContent = spec.label;
+  var sortSel = document.getElementById("genreSort");
+  if (sortSel) sortSel.value = "year-desc";
+  renderGenreChips();
+  showView("genre");
+  runGenrePool();
+}
+
+function renderGenreChips() {
+  var wrap = document.getElementById("genreSubChips");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!genreState.subs.length) return;
+  var all = document.createElement("button");
+  all.className = "chip" + (genreState.sub === "" ? " active" : "");
+  all.setAttribute("aria-pressed", genreState.sub === "" ? "true" : "false");
+  all.textContent = "All " + genreState.label;
+  all.addEventListener("click", function () { genreState.sub = ""; renderGenreChips(); runGenrePool(); });
+  wrap.appendChild(all);
+  genreState.subs.forEach(function (pair) {
+    var chip = document.createElement("button");
+    chip.className = "chip" + (genreState.sub === pair[0] ? " active" : "");
+    chip.setAttribute("aria-pressed", genreState.sub === pair[0] ? "true" : "false");
+    chip.textContent = pair[1];
+    chip.addEventListener("click", function () {
+      genreState.sub = (genreState.sub === pair[0]) ? "" : pair[0];
+      renderGenreChips();
+      runGenrePool();
+    });
+    wrap.appendChild(chip);
+  });
+}
+
+function runGenrePool() {
+  var seq = ++genreState.seq;
+  var grid = document.getElementById("genreGrid");
+  grid.innerHTML = "";
+  genreState.pool = null;
+  genreState.shown = 0;
+  document.getElementById("genreCount").textContent = "Loading from archive.org...";
+  document.getElementById("genreMoreBtn").style.display = "none";
+  var q = genreState.q;
+  if (genreState.sub) q += ' AND subject:"' + genreState.sub.replace(/"/g, "") + '"';
+  searchArchive(q, { rows: GENRE_POOL_MAX, sort: "downloads desc",
+      type: genreState.type, allowAdult: genreState.adult })
+    .then(function (res) {
+      if (seq !== genreState.seq) return;
+      genreState.total = res.total || 0;
+      genreState.fetched = res.items.length;
+      var items = res.items;
+      if (genreState.noYoutube) items = items.filter(function (it) { return !isYoutubeRip(it.id); });
+      items = filterNotForMe(filterVisible(items));
+      genreState.pool = sortGenreItems(items, genreState.sort);
+      appendGenreChunk();
+    }).catch(function () {
+      if (seq !== genreState.seq) return;
+      document.getElementById("genreCount").textContent = "";
+      grid.appendChild(emptyStateWithAction(
+        "Could not reach archive.org. Check your connection and try again.",
+        "Retry",
+        function () { runGenrePool(); }));
+    });
+}
+
+function appendGenreChunk() {
+  var grid = document.getElementById("genreGrid");
+  var pool = genreState.pool || [];
+  var chunk = slicePoolPage(pool, genreState.shown, GENRE_PAGE);
+  chunk.forEach(function (it) {
+    grid.appendChild(cardEl(it, genreState.adult ? { adultContext: true } : undefined));
+  });
+  genreState.shown += chunk.length;
+  if (!pool.length && genreState.shown === 0) {
+    grid.appendChild(emptyStateWithAction(
+      "Nothing in this genre matches your filters right now.",
+      "Back",
+      function () { showView(genreState.adult ? "adult" : "home"); }));
+  }
+  var countText = pool.length + " titles in " + genreState.label +
+    ". Showing " + genreState.shown + ".";
+  if (genreState.fetched >= GENRE_POOL_MAX && genreState.total > genreState.fetched &&
+      genreState.shown >= pool.length) {
+    countText += " These are the most downloaded " + GENRE_POOL_MAX + " of " +
+      genreState.total + ".";
+  }
+  document.getElementById("genreCount").textContent = countText;
+  document.getElementById("genreMoreBtn").style.display =
+    genreState.shown < pool.length ? "inline-block" : "none";
+}
+
+/* ---------- Reading language ---------- */
+/* Descriptions arrive in whatever language the uploader wrote
+   them in. The profile's reading language (Settings, default
+   English) is what they are shown in: a description detected
+   in another language is translated for display only, and the
+   player's subtitle tracks prefer the same language. Titles
+   are never translated. Detection is on-device and
+   deliberately conservative: script ranges for the non-Latin
+   scripts, stopword scoring for the Latin ones, and no answer
+   at all when it is not confident, so an unsure text is left
+   exactly as written. */
+
+function readLang() {
+  var code = state && state.readLang;
+  return READ_LANG_CODES.indexOf(code) !== -1 ? code : "en";
+}
+
+var LANG_STOPWORDS = {
+  en: "the a an and or of to in is are was were he she it his her with for on at by from as but not who when after before one man woman this that",
+  fr: "le la les de des du un une et est dans qui que au aux pour avec sur pas plus son sa ses ce cette il elle nous vous ils par comme etre",
+  es: "el la los las de un una y en que es del se por para con no su al lo como pero sus le ya o este esta porque muy",
+  de: "der die das und ist ein eine von zu den mit sich des auf im dem nicht als auch es an werden aus er hat dass sie nach wird bei einem um am sind noch wie",
+  it: "il lo la di che e le dei a in un una per sono anche come da gli al alla del delle nel con su tra fra questo questa essere quando dove",
+  pt: "o a os as de um uma e em do da dos das que para com por se ao mais como mas ele ela seu sua ou quando muito também",
+  nl: "de het een van en in op te dat die zijn is hij zij aan met voor ik niet dit deze worden uit heeft naar bij",
+  pl: "się że nie jest jak ale przez dla są był była kiedy gdzie człowiek już tak",
+  sv: "och det att i en jag hon han som var sig för så till är men ett om hade de av inte har du hans hennes skulle kunna när efter över utan",
+  tr: "bir ve de da ne için gibi çok bu şu ile ama çünkü sonra önce kadar olan olarak değil en hiç şey adam kadın",
+  id: "yang dan di ke dari ini itu dengan untuk tidak akan pada juga oleh dalam adalah seorang telah dia mereka"
+};
+
+/* The language a text is written in, or null when detection is
+   not confident. Pure, so the node test can drive it. */
+function detectTextLanguage(text) {
+  var t = String(text || "");
+  if (t.length < 12) return null;
+  /* Script first: a run of letters from one of these ranges
+     names the language family outright. Ukrainian is told from
+     Russian by its own letters (і, ї, є, ґ). */
+  var cyr = 0, cyrUk = 0, kana = 0, hangul = 0, han = 0, arab = 0, deva = 0;
+  for (var i = 0; i < t.length; i++) {
+    var cp = t.charCodeAt(i);
+    if (cp >= 0x0400 && cp <= 0x04FF) {
+      cyr++;
+      if (cp === 0x0406 || cp === 0x0407 || cp === 0x0404 || cp === 0x0490 ||
+          cp === 0x0456 || cp === 0x0457 || cp === 0x0454 || cp === 0x0491) cyrUk++;
+    }
+    else if (cp >= 0x3040 && cp <= 0x30FF) kana++;
+    else if (cp >= 0xAC00 && cp <= 0xD7A3) hangul++;
+    else if (cp >= 0x4E00 && cp <= 0x9FFF) han++;
+    else if (cp >= 0x0600 && cp <= 0x06FF) arab++;
+    else if (cp >= 0x0900 && cp <= 0x097F) deva++;
+  }
+  if (kana >= 4) return "ja";
+  if (hangul >= 4) return "ko";
+  if (han >= 4 && kana === 0) return "zh-CN";
+  if (arab >= 4) return "ar";
+  if (deva >= 4) return "hi";
+  if (cyr >= 4) return cyrUk > 0 ? "uk" : "ru";
+  /* Stopword scoring for the Latin script languages: each
+     language scores its own common words (a word repeated
+     counts at most 3 times, so one repeated word cannot carry
+     a verdict), and a few letters only one language uses add
+     their own evidence. */
+  var tokens;
+  try { tokens = t.toLowerCase().split(/[^\p{L}]+/u); }
+  catch (e) { tokens = t.toLowerCase().split(/[^a-zà-ÿ]+/); }
+  var counts = {};
+  tokens.forEach(function (w) { if (w) counts[w] = (counts[w] || 0) + 1; });
+  var scores = {};
+  Object.keys(LANG_STOPWORDS).forEach(function (code) {
+    var score = 0;
+    LANG_STOPWORDS[code].split(" ").forEach(function (w) {
+      score += Math.min(counts[w] || 0, 3);
+    });
+    scores[code] = score;
+  });
+  var low = t.toLowerCase();
+  if (low.indexOf("ñ") !== -1) scores.es += 3;
+  if (/[ãõ]/.test(low)) scores.pt += 3;
+  if (/[ğşı]/.test(low)) scores.tr += 3;
+  if (low.indexOf("ß") !== -1) scores.de += 3;
+  var best = null, bestScore = 0, second = 0;
+  Object.keys(scores).forEach(function (code) {
+    if (scores[code] > bestScore) { second = bestScore; bestScore = scores[code]; best = code; }
+    else if (scores[code] > second) second = scores[code];
+  });
+  if (!best || bestScore <= second) return null;
+  /* English gets a slightly lower bar: it is the language most
+     descriptions are in, and mistaking a short foreign text
+     for English only leaves it untranslated, never garbled. */
+  if (bestScore >= 3 || (best === "en" && bestScore >= 2)) return best;
+  return null;
+}
+
+/* Split a long text into translation sized pieces, cutting at
+   sentence ends where possible so no sentence is ever cut in
+   half. Pure. */
+function splitForTranslation(text, max) {
+  var out = [];
+  var rest = String(text || "");
+  max = max || 450;
+  while (rest.length > max) {
+    var window = rest.slice(0, max);
+    var cut = -1;
+    var m = window.match(/[\s\S]*[.!?]\s/);
+    if (m && m[0].length > max * 0.4) cut = m[0].length;
+    if (cut === -1) {
+      var sp = window.lastIndexOf(" ");
+      cut = sp > max * 0.4 ? sp + 1 : max;
+    }
+    out.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) out.push(rest);
+  return out.filter(function (p) { return p.length > 0; });
+}
+
+/* Translations cache on this device only (they are Archive
+   description text, no personal data), keyed by the text and
+   the target language, so a title is translated once and read
+   from the cache after that. */
+var TRANSLATION_CACHE_KEY = "archiveflix.translations.v1";
+var TRANSLATION_CACHE_MAX = 300;
+var translationCache = null;
+
+function translationCacheLoad() {
+  if (translationCache) return translationCache;
+  translationCache = {};
+  try {
+    var raw = storeGet(TRANSLATION_CACHE_KEY);
+    if (raw) {
+      var parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") translationCache = parsed;
+    }
+  } catch (e) { translationCache = {}; }
+  return translationCache;
+}
+
+function translationHash(text) {
+  var h = 5381;
+  for (var i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) >>> 0;
+  return h.toString(36) + "." + text.length;
+}
+
+function translationCacheGet(text, target) {
+  var c = translationCacheLoad();
+  var e = c[target + "|" + translationHash(text)];
+  return e && typeof e.t === "string" ? e.t : null;
+}
+
+function translationCachePut(text, target, translated) {
+  var c = translationCacheLoad();
+  c[target + "|" + translationHash(text)] = { t: translated, at: Date.now() };
+  var keys = Object.keys(c);
+  if (keys.length > TRANSLATION_CACHE_MAX) {
+    keys.sort(function (a, b) { return (c[a].at || 0) - (c[b].at || 0); });
+    keys.slice(0, keys.length - TRANSLATION_CACHE_MAX).forEach(function (k) { delete c[k]; });
+  }
+  try { storeSet(TRANSLATION_CACHE_KEY, JSON.stringify(c)); } catch (e) { /* the cache is a bonus, never a failure */ }
+}
+
+/* Two free, keyless translation services, tried in order. Both
+   are real public endpoints that answer browsers directly
+   (Access-Control-Allow-Origin: *, verified live 2026-11-20).
+   Google's endpoint completed a real round trip from this
+   build's sandbox on 2026-11-20 (a French description from a
+   real Archive item came back in English), though it also
+   refuses this datacenter address as automated traffic at
+   other times, and MyMemory's anonymous daily quota for the
+   shared address was used up the same day (its quota warning
+   text is rejected below, never shown as a translation). So a
+   failure here is a normal outcome the caller handles
+   honestly: the original text stays, with a note. Nothing is
+   ever faked: a translation is shown only when a service
+   actually returned one. */
+function translateChunkGoogle(chunk, source, target) {
+  var url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" +
+    encodeURIComponent(source || "auto") + "&tl=" + encodeURIComponent(target) +
+    "&dt=t&q=" + encodeURIComponent(chunk);
+  return fetchWithTimeout(url, FETCH_TIMEOUT_SEARCH_MS).then(function (res) {
+    if (!res.ok) return null;
+    return res.json();
+  }).then(function (json) {
+    if (!json || !Array.isArray(json[0])) return null;
+    var out = "";
+    json[0].forEach(function (seg) { if (seg && seg[0]) out += seg[0]; });
+    out = out.trim();
+    return out || null;
+  }).catch(function () { return null; });
+}
+
+function translateChunkMyMemory(chunk, source, target) {
+  if (!source || source === "auto") return Promise.resolve(null);
+  var url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(chunk) +
+    "&langpair=" + encodeURIComponent(source) + "%7C" + encodeURIComponent(target);
+  return fetchWithTimeout(url, FETCH_TIMEOUT_SEARCH_MS).then(function (res) {
+    if (!res.ok) return null;
+    return res.json();
+  }).then(function (json) {
+    var d = json && json.responseData;
+    if (!d || !d.translatedText) return null;
+    if (String(json.responseStatus) !== "200") return null;
+    if (/MYMEMORY WARNING|QUERY LENGTH LIMIT|INVALID/i.test(d.translatedText)) return null;
+    var out = String(d.translatedText).trim();
+    return out || null;
+  }).catch(function () { return null; });
+}
+
+function translateChunk(chunk, source, target) {
+  return translateChunkGoogle(chunk, source, target).then(function (t) {
+    if (t != null) return t;
+    return translateChunkMyMemory(chunk, source, target);
+  });
+}
+
+/* Translate a whole description into the target language, or
+   return null when no service produced one. One failed chunk
+   fails the whole text: a half translated description is worse
+   than the honest original. Successes are cached on device. */
+function translateDescription(text, target, source) {
+  if (!text || !target) return Promise.resolve(null);
+  var cached = translationCacheGet(text, target);
+  if (cached != null) return Promise.resolve(cached);
+  var chunks = splitForTranslation(text, 450);
+  var out = [];
+  var chain = Promise.resolve();
+  chunks.forEach(function (chunk) {
+    chain = chain.then(function () {
+      return translateChunk(chunk, source, target).then(function (t) {
+        if (t == null) throw new Error("translation unavailable");
+        out.push(t);
+      });
+    });
+  });
+  return chain.then(function () {
+    var joined = out.join(" ");
+    translationCachePut(text, target, joined);
+    return joined;
+  }).catch(function () { return null; });
+}
+
+/* Show one rendered description in the reading language. The
+   stored text is never touched: this only ever rewrites the
+   paragraph on screen, and only when a real translation
+   arrived. The note under the text always says plainly what
+   happened (translating, translated from, or not available). */
+function applyDescriptionLanguage(rootEl, text) {
+  if (!rootEl || !text || typeof document === "undefined") return;
+  var wrap = rootEl.querySelector ? rootEl.querySelector(".desc-wrap") : null;
+  if (!wrap) return;
+  var target = readLang();
+  var detected = detectTextLanguage(text);
+  if (!detected || detected === target) return;
+  var note = document.createElement("p");
+  note.className = "desc-lang-note";
+  note.textContent = "Description in " + readLangName(detected) + ". Translating...";
+  wrap.appendChild(note);
+  translateDescription(text, target, detected).then(function (translated) {
+    var textEl = wrap.querySelector(".desc-text");
+    /* A newer render owns this paragraph now; leave it alone. */
+    if (!textEl || textEl.textContent !== text) return;
+    if (translated) {
+      textEl.textContent = translated;
+      note.textContent = "Translated from " + readLangName(detected) + ".";
+      wireExpandableDescs(rootEl);
+    } else {
+      note.textContent = "This description is in " + readLangName(detected) +
+        ". Translation is not available right now.";
+    }
+  });
+}
+
 /* ---------- Details sheet ---------- */
 
 var currentDetails = null;
@@ -6205,7 +6950,13 @@ function openDetails(item, opts) {
   currentDetailsAdult = adultCtx;
   var body = document.getElementById("detailsBody");
   body.innerHTML = "<p>Loading details from archive.org...</p>";
+  /* A fresh open is one view in the behavior analytics. The
+     sheet re-renders itself after a Like or a rating tap, and
+     those re-renders are not new views, so only an open from
+     hidden counts. */
+  var sheetWasHidden = document.getElementById("detailsSheet").hidden;
   document.getElementById("detailsSheet").hidden = false;
+  if (sheetWasHidden) recordBehavior(item, "view", adultCtx);
   document.body.style.overflow = "hidden";
   dialogOpened(dialogElFor("detailsSheet"));
 
@@ -6396,6 +7147,7 @@ function openDetails(item, opts) {
       });
     });
     wireExpandableDescs(body);
+    applyDescriptionLanguage(body, desc);
     renderDetailsCredits(body, fullItem);
     wireRowArrows(body.querySelector(".row-viewport"));
     renderEpisodeSection(item, files, subjects);
@@ -6870,6 +7622,7 @@ function openPlayer(item) {
   recoveryBudget.reset();
   playCountedToken = 0;
   playCountedKey = null;
+  playerSubtitleFiles = [];
   clearNextEpisodeTimers();
   clearPlayerTracks();
   clearTimeout(playerRecoveryTimer);
@@ -6890,6 +7643,7 @@ function openPlayer(item) {
        first episode opened must never overwrite the second. */
     if (token !== playerOpenToken || !currentPlayer) return;
     var files = meta.files || [];
+    playerSubtitleFiles = subtitleFilesFromList(files);
     if (item.file) {
       /* One episode inside a multi-file series item: play that
          file, not the item's default pick. */
@@ -7009,6 +7763,92 @@ function countPlayOnce(item) {
   saveState();
 }
 
+/* Subtitle files an item carries, from its Archive file list.
+   Real items carry them as separate .srt or .vtt files, most
+   often the Archive's own speech recognition output named
+   "<title>.asr.srt" (House on Haunted Hill and Carnival of
+   Souls both carry one, verified live 2026-11-20); uploaders
+   also name them with a language code ("<title>.en.srt",
+   "<title>_eng.srt"). The language is read from the file name
+   only, never guessed from content, and a lone title word is
+   never read as a language: the code must be the last token of
+   a multi-token name. Pure, so the node test can drive it. */
+var SUBTITLE_LANG_BY_TOKEN = { en: "en", eng: "en", fr: "fr", fre: "fr", fra: "fr",
+  es: "es", spa: "es", de: "de", deu: "de", ger: "de", it: "it", ita: "it",
+  pt: "pt", por: "pt", nl: "nl", dut: "nl", ru: "ru", rus: "ru",
+  ja: "ja", jpn: "ja", ko: "ko", kor: "ko", zh: "zh-CN", chi: "zh-CN", zho: "zh-CN",
+  pl: "pl", pol: "pl", sv: "sv", swe: "sv", ar: "ar", ara: "ar",
+  hi: "hi", hin: "hi", tr: "tr", tur: "tr", uk: "uk", ukr: "uk",
+  id: "id", ind: "id" };
+
+function subtitleFilesFromList(files) {
+  var out = [];
+  (files || []).forEach(function (f) {
+    var name = f && f.name ? String(f.name) : "";
+    var m = name.match(/\.(srt|vtt)$/i);
+    if (!m) return;
+    var base = name.slice(0, name.length - m[0].length);
+    var auto = /(^|[._\-])asr$/i.test(base);
+    var lang = null;
+    if (auto) lang = "en";
+    else {
+      var tokens = base.toLowerCase().split(/[^a-z]+/).filter(Boolean);
+      if (tokens.length >= 2) {
+        for (var i = tokens.length - 1; i >= 0; i--) {
+          if (SUBTITLE_LANG_BY_TOKEN[tokens[i]]) { lang = SUBTITLE_LANG_BY_TOKEN[tokens[i]]; break; }
+        }
+      }
+    }
+    var label = lang ? readLangName(lang) : "Subtitles";
+    if (auto) label += " (auto)";
+    out.push({ name: name, format: m[1].toLowerCase(), lang: lang, label: label, auto: auto });
+  });
+  return out;
+}
+
+/* One SRT timestamp as a WebVTT timestamp. The fraction is a
+   decimal, so it is padded on the right: the Archive's speech
+   recognition SRTs write ",55" for 0.55 seconds, which is 550
+   in WebVTT's three digit milliseconds, not 055. */
+function srtTimeToVtt(t) {
+  var s = String(t || "").trim().split(/\s+/)[0];
+  var m = s.match(/^(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})$/);
+  if (m) return ("0" + m[1]).slice(-2) + ":" + m[2] + ":" + m[3] + "." + (m[4] + "00").slice(0, 3);
+  var m2 = s.match(/^(\d{1,2}):(\d{2})[.,](\d{1,3})$/);
+  if (m2) return "00:" + m2[1] + ":" + m2[2] + "." + (m2[3] + "00").slice(0, 3);
+  return "00:00:00.000";
+}
+
+/* Convert SRT subtitle text to WebVTT: sequence numbers and
+   styling tags drop, cue text passes through. Pure, so the
+   node test can drive it on a real file. */
+function srtToVtt(text) {
+  var src = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  var blocks = src.split(/\n\s*\n/);
+  var cues = [];
+  blocks.forEach(function (block) {
+    var lines = block.split("\n").map(function (l) { return l.trim(); })
+      .filter(function (l) { return l.length > 0; });
+    if (!lines.length) return;
+    var timeIdx = -1;
+    for (var i = 0; i < Math.min(lines.length, 3); i++) {
+      if (lines[i].indexOf("-->") !== -1) { timeIdx = i; break; }
+    }
+    if (timeIdx === -1) return;
+    var times = lines[timeIdx].split("-->");
+    if (times.length < 2) return;
+    var body = lines.slice(timeIdx + 1).join("\n").replace(/<[^>]+>/g, "");
+    if (!body) return;
+    cues.push(srtTimeToVtt(times[0]) + " --> " + srtTimeToVtt(times[1]) + "\n" + body);
+  });
+  return "WEBVTT\n\n" + cues.join("\n\n") + (cues.length ? "\n" : "");
+}
+
+function ensureVttHeader(text) {
+  var t = String(text || "");
+  return /^\s*WEBVTT/.test(t) ? t : "WEBVTT\n\n" + t.replace(/^\s+/, "");
+}
+
 /* The subtitle and audio tracks a playing file actually carries.
    Most Archive files carry none, so the selector only exists
    when there is something to pick. Pure over the video element's
@@ -7119,6 +7959,90 @@ function renderPlayerTracks(video) {
   }
 }
 
+/* The subtitle files of the item now open in the player,
+   recomputed from its file list on every open. */
+var playerSubtitleFiles = [];
+
+/* Attach an item's own subtitle files to the native player as
+   text tracks: fetched, converted from SRT to WebVTT when
+   needed, and handed to the video element as blob URLs, so the
+   track picker (renderPlayerTracks) lists them by language
+   like any embedded track. The track matching the reading
+   language is switched on by default.
+   The honest limit: archive.org's file servers send no
+   Access-Control-Allow-Origin header (verified live 2026-11-20
+   on the download host and on two item datanodes), so a
+   browser will not let this page read the files today, and the
+   fetches here fail. When that happens and the item does carry
+   subtitle files, the player says so plainly and links to the
+   files instead of pretending the tracks work
+   (showSubtitleFileNote). If the Archive ever serves the
+   headers, this same code lights the tracks up unchanged. */
+function attachFileSubtitles(video, item) {
+  var subs = playerSubtitleFiles;
+  if (!subs.length || !item) return;
+  var wanted = readLang();
+  var attempted = Math.min(subs.length, 5);
+  var attached = 0;
+  var failed = 0;
+  subs.slice(0, 5).forEach(function (sub) {
+    fetchWithTimeout(downloadUrl(item.id, sub.name), FETCH_TIMEOUT_SEARCH_MS)
+      .then(function (res) {
+        if (!res.ok) throw new Error("subtitle fetch failed");
+        return res.text();
+      }).then(function (text) {
+        if (currentVideo !== video) return;
+        var vtt = sub.format === "srt" ? srtToVtt(text) : ensureVttHeader(text);
+        var url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
+        var track = document.createElement("track");
+        track.kind = "subtitles";
+        track.label = sub.label;
+        if (sub.lang) track.srclang = sub.lang;
+        track.src = url;
+        video.appendChild(track);
+        attached++;
+        if (sub.lang && sub.lang === wanted && track.track) {
+          try { track.track.mode = "showing"; } catch (e) { /* picker still offers it */ }
+        }
+        track.addEventListener("load", function () {
+          if (currentVideo === video) renderPlayerTracks(video);
+        });
+        renderPlayerTracks(video);
+      }).catch(function () {
+        failed++;
+        if (currentVideo !== video) return;
+        if (attached === 0 && failed >= attempted) showSubtitleFileNote(subs);
+      });
+  });
+}
+
+/* The fallback when an item carries subtitle files but the
+   browser cannot read them (see attachFileSubtitles): a plain
+   line naming the files by language, each a working link to
+   the file itself. Shown only when no track attached, so it
+   never sits next to a working picker. */
+function showSubtitleFileNote(subs) {
+  var wrap = ensurePlayerTracksEl();
+  if (!wrap || !currentPlayer) return;
+  wrap.innerHTML = "";
+  wrap.hidden = false;
+  var span = document.createElement("span");
+  span.textContent = "Subtitles: this title carries " +
+    (subs.length === 1 ? "a subtitle file" : subs.length + " subtitle files") +
+    " (" + subs.map(function (s) { return s.label; }).join(", ") +
+    "), but archive.org does not let other websites load them. ";
+  wrap.appendChild(span);
+  subs.forEach(function (sub, i) {
+    var a = document.createElement("a");
+    a.href = downloadUrl(currentPlayer.id, sub.name);
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "Open the " + sub.label + " subtitle file";
+    wrap.appendChild(a);
+    if (i < subs.length - 1) wrap.appendChild(document.createTextNode(" · "));
+  });
+}
+
 function startNativePlayer(item, file) {
   /* Stop any previous video before replacing it, so a failed
      stream stops downloading once its element is gone. */
@@ -7135,6 +8059,7 @@ function startNativePlayer(item, file) {
   video.src = downloadUrl(item.id, file.name);
   frame.innerHTML = "";
   frame.appendChild(video);
+  attachFileSubtitles(video, item);
   currentVideo = video;
   setPlayerMode("video");
   countPlayOnce(item);
@@ -8378,7 +9303,8 @@ function startProfileRename(row, p) {
    a null element, leaving every view inactive (a blank page) and
    the nav unswitched. */
 var VIEW_IDS = { home: "homeView", browse: "browseView", mylist: "myListView",
-  history: "historyView", adult: "adultView", settings: "settingsView" };
+  history: "historyView", adult: "adultView", settings: "settingsView",
+  genre: "genreView" };
 
 function viewIdFor(name) { return VIEW_IDS[name] || name + "View"; }
 
@@ -8406,7 +9332,12 @@ function showView(name) {
       return;
     }
   }
-  if (name !== "adult") adultUnlocked = false;
+  /* The Genre view opened from an adult row is still inside
+     the section: it keeps the unlock. Any other destination
+     locks the section again, exactly as leaving it always has. */
+  if (name !== "adult" && !(name === "genre" && genreState.adult && adultUnlocked)) {
+    adultUnlocked = false;
+  }
   document.querySelectorAll(".view").forEach(function (v) { v.classList.remove("active"); });
   var viewEl = document.getElementById(viewIdFor(name));
   if (viewEl) viewEl.classList.add("active");
@@ -8445,22 +9376,45 @@ function showView(name) {
    appear only here: every other query excludes them, and the home
    shelves, My List and History filter them out. */
 
+/* The section's category rows (v1.6.4): the pool broken out by
+   its real tags, so each strand of it is browsable on its own.
+   Counts are feature_films matches per subject, measured live
+   2026-11-20 (the pool union is 150 titles): sex comedy 61,
+   erotic 22, sexploitation 12, adults only 11, erotica 3,
+   softcore 5, nudie 6, nudist 1, nudie cutie 6, stripper 4,
+   strippers 2, stag 2, mondo 2. Rows under about eight titles
+   merge with their nearest neighbours: softcore rides with
+   sexploitation, the stag and striptease reels ride with
+   mondo, and nudist rides with the nudie classics it belongs
+   to. Every row title also opens the Genre view for that
+   category (genreSpec, adult true), behind the same PIN gate.
+   Adult animation keeps its own row: it is a kind, not a tag
+   shard, and its 2 titles (Aachi and Ssipak, Tarzoon, verified
+   live 2026-11-15) sit in no other row's query. */
 var ADULT_ROW_DEFS = [
   { id: "adult-all", title: "18+ Films", subtitle: "Every adults only film in the Archive's feature collection",
-    q: MOVIES + " AND " + ADULT_QUERY, sort: "downloads desc", allowAdult: true },
-  { id: "adult-erotica", title: "Erotica",
-    q: MOVIES + " AND subject:(erotica OR erotic)", sort: "downloads desc", allowAdult: true },
-  { id: "adult-sexploit", title: "Sexploitation",
-    q: MOVIES + " AND subject:(sexploitation OR softcore)", sort: "downloads desc", allowAdult: true },
+    q: MOVIES + " AND " + ADULT_QUERY, sort: "downloads desc", allowAdult: true,
+    genreSpec: { label: "18+ Films", adult: true } },
   { id: "adult-sexcomedy", title: "Sex Comedies",
-    q: MOVIES + ' AND subject:"sex comedy"', sort: "downloads desc", allowAdult: true },
+    q: MOVIES + ' AND subject:"sex comedy"', sort: "downloads desc", allowAdult: true,
+    genreSpec: { label: "Sex Comedies", adult: true } },
+  { id: "adult-erotica", title: "Erotica",
+    q: MOVIES + " AND subject:(erotica OR erotic)", sort: "downloads desc", allowAdult: true,
+    genreSpec: { label: "Erotica", adult: true } },
+  { id: "adult-sexploit", title: "Sexploitation",
+    q: MOVIES + " AND subject:(sexploitation OR softcore)", sort: "downloads desc", allowAdult: true,
+    genreSpec: { label: "Sexploitation", adult: true } },
   { id: "adult-nudie", title: "Nudie Classics",
-    q: MOVIES + ' AND subject:(nudie OR "adults only")', sort: "downloads desc", allowAdult: true },
-  /* Adult animation gets its own row instead of sitting mixed in
-     with the live action films. Small but real: 2 titles verified
-     live 2026-11-15 (Aachi and Ssipak, Tarzoon). */
+    q: MOVIES + ' AND subject:(nudie OR nudist OR "adults only" OR "nudie cutie" OR "nudie-cutie")',
+    sort: "downloads desc", allowAdult: true,
+    genreSpec: { label: "Nudie Classics", adult: true } },
+  { id: "adult-stag", title: "Stag, Striptease and Mondo", subtitle: "Stag reels, striptease shorts and mondo films",
+    q: MOVIES + " AND subject:(stag OR stripper OR strippers OR mondo)",
+    sort: "downloads desc", allowAdult: true,
+    genreSpec: { label: "Stag, Striptease and Mondo", adult: true } },
   { id: "adult-animation", title: "Adult Animation", subtitle: "Animated adults only titles, kept apart from the live action rows",
-    q: MOVIES + " AND subject:animation AND " + ADULT_QUERY, sort: "downloads desc", allowAdult: true, type: "cartoon" }
+    q: MOVIES + " AND subject:animation AND " + ADULT_QUERY, sort: "downloads desc", allowAdult: true, type: "cartoon",
+    genreSpec: { label: "Adult Animation", adult: true, type: "cartoon" } }
 ];
 
 var adultLoaded = false;
@@ -8512,6 +9466,70 @@ function renderAdultPersonal(container) {
     container.appendChild(s3);
     fillRow(s3, ml, null, { adultContext: true });
   }
+  /* Because rows for the section, built from the adult taste
+     profile only: this profile's adult views, clicks, watches,
+     likes and ratings, weighted, explored and diversified the
+     same way as the normal Because rows, and never mixed with
+     the normal profile in either direction. Candidates are
+     adult by query (ADULT_QUERY) and by the client side check
+     in usable(), so a non-adult title can never fill the row. */
+  var aTaste = adultTasteProfile();
+  var aSeeds = adultSeedDedupeKeys();
+  topSignalSubjects(aTaste).forEach(function (sig) {
+    var s4 = rowEl("Because you watched " + capitalizeFirst(sig.subject),
+      "Picked from what you watch and like in this section");
+    s4.classList.add("adult-personal");
+    container.appendChild(s4);
+    var scroll4 = s4.querySelector(".row-scroll");
+    scroll4.innerHTML = '<div class="skeleton-row"><div class="skeleton-card"></div>' +
+      '<div class="skeleton-card"></div><div class="skeleton-card"></div></div>';
+    var rowType = sig.types.length === 1 ? sig.types[0] : undefined;
+    var baseQuery = typeQueryForTypes(sig.types);
+    var rowSearch = searchArchive(baseQuery + ' AND subject:"' + sig.subject.replace(/"/g, "") +
+        '" AND ' + ADULT_QUERY,
+      { rows: 60, sort: "downloads desc", type: rowType, allowAdult: true });
+    var exploreSearch = searchArchive(baseQuery + " AND " + ADULT_QUERY,
+      { rows: 120, sort: "downloads desc", type: rowType, allowAdult: true })
+      .then(function (r) { return r; }, function () { return { items: [] }; });
+    Promise.all([rowSearch, exploreSearch]).then(function (both) {
+      function usable(items) {
+        return filterNotForMe(filterVisible(items)).filter(function (it) {
+          if (!isAdultItem(it)) return false;
+          var dk = dedupeKey(it);
+          return !dk || !aSeeds[dk];
+        });
+      }
+      var candidates = usable(both[0].items);
+      if (!candidates.length) { s4.remove(); return; }
+      var explore = exploreCandidates(usable(both[1].items), aTaste, sig.key);
+      fillRow(s4, composeBecauseRow(candidates, explore, aTaste), null, { adultContext: true });
+    }).catch(function () { s4.remove(); });
+  });
+}
+
+/* The dedupe keys an adult Because row must never recommend:
+   the adult titles this profile already watched or liked.
+   Mirrors seedDedupeKeys, taking only the adult side of each
+   store. */
+function adultSeedDedupeKeys() {
+  var keys = {};
+  Object.keys(state.history).forEach(function (k) {
+    var h = state.history[k];
+    var adult = isAdultEntry(h) || isAdultItem(h) ||
+      (adultPoolSet && isInAdultPool(h.title, storedYear(h)));
+    if (!adult) return;
+    var dk = dedupeKey({ title: h.title, year: storedYear(h) });
+    if (dk) keys[dk] = true;
+  });
+  Object.keys(state.reactions).forEach(function (id) {
+    var r = state.reactions[id];
+    if (r.value !== 1) return;
+    var adult = isAdultItem(r) || (adultPoolSet && isInAdultPool(r.title, r.year));
+    if (!adult) return;
+    var dk = dedupeKey({ title: r.title, year: r.year });
+    if (dk) keys[dk] = true;
+  });
+  return keys;
 }
 
 function loadAdult() {
@@ -8521,6 +9539,8 @@ function loadAdult() {
   ADULT_ROW_DEFS.forEach(function (def) {
     var section = rowEl(def.title, def.subtitle || "");
     container.appendChild(section);
+    var adultGenreSpec = genreSpecForRowDef(def);
+    if (adultGenreSpec) linkRowTitle(section, adultGenreSpec);
     var scroll = section.querySelector(".row-scroll");
     scroll.innerHTML = '<div class="skeleton-row"><div class="skeleton-card"></div>' +
       '<div class="skeleton-card"></div><div class="skeleton-card"></div></div>';
@@ -8940,6 +9960,14 @@ function initInstallPrompt() {
 function syncHideWatchedBoxes() {
   document.getElementById("hideWatchedTop").checked = state.hideWatched;
   syncAutoAdvanceToggle();
+  syncReadLangSelect();
+}
+
+/* The reading language select in Settings follows the active
+   profile, like the other per-profile controls. */
+function syncReadLangSelect() {
+  var sel = document.getElementById("readLangSelect");
+  if (sel) sel.value = readLang();
 }
 
 /* The auto-advance checkbox in Settings follows the active
@@ -9196,6 +10224,35 @@ function init() {
   document.getElementById("autoAdvanceToggle").addEventListener("change", function (e) {
     state.autoAdvance = e.target.checked;
     saveState();
+  });
+
+  var readLangSel = document.getElementById("readLangSelect");
+  if (readLangSel) {
+    READ_LANGS.forEach(function (l) {
+      var o = document.createElement("option");
+      o.value = l.code;
+      o.textContent = l.name;
+      readLangSel.appendChild(o);
+    });
+    readLangSel.value = readLang();
+    readLangSel.addEventListener("change", function (e) {
+      state.readLang = e.target.value;
+      saveState();
+    });
+  }
+
+  document.getElementById("genreMoreBtn").addEventListener("click", function () { appendGenreChunk(); });
+  document.getElementById("genreBack").addEventListener("click", function () {
+    showView(genreState.adult ? "adult" : "home");
+  });
+  document.getElementById("genreSort").addEventListener("change", function (e) {
+    genreState.sort = e.target.value;
+    if (genreState.pool) {
+      genreState.pool = sortGenreItems(genreState.pool, genreState.sort);
+      document.getElementById("genreGrid").innerHTML = "";
+      genreState.shown = 0;
+      appendGenreChunk();
+    }
   });
 
   document.getElementById("searchInput").addEventListener("input", function (e) {
@@ -9683,6 +10740,31 @@ if (typeof module !== "undefined" && module.exports) {
     engagementWeight: engagementWeight,
     ratingWeight: ratingWeight,
     tasteProfile: tasteProfile,
+    /* v1.6.4: genre view, language, subtitles, behavior. */
+    tasteProfileFor: tasteProfileFor,
+    adultTasteProfile: adultTasteProfile,
+    adultSeedDedupeKeys: adultSeedDedupeKeys,
+    genreSpecForRowDef: genreSpecForRowDef,
+    compareDerivedYear: compareDerivedYear,
+    sortGenreItems: sortGenreItems,
+    slicePoolPage: slicePoolPage,
+    GENRE_POOL_MAX: GENRE_POOL_MAX,
+    YEAR_POOL_MAX: YEAR_POOL_MAX,
+    detectTextLanguage: detectTextLanguage,
+    splitForTranslation: splitForTranslation,
+    translateDescription: translateDescription,
+    READ_LANGS: READ_LANGS,
+    srtToVtt: srtToVtt,
+    srtTimeToVtt: srtTimeToVtt,
+    ensureVttHeader: ensureVttHeader,
+    subtitleFilesFromList: subtitleFilesFromList,
+    behaviorWeight: behaviorWeight,
+    recordBehavior: recordBehavior,
+    sanitizeBehavior: sanitizeBehavior,
+    sanitizeProfileData: sanitizeProfileData,
+    VIEW_WEIGHT: VIEW_WEIGHT,
+    CLICK_WEIGHT: CLICK_WEIGHT,
+    BEHAVIOR_WEIGHT_CAP: BEHAVIOR_WEIGHT_CAP,
     tasteScoreOf: tasteScoreOf,
     exploreCandidates: exploreCandidates,
     exploreSlotCount: exploreSlotCount,

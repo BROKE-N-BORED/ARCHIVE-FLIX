@@ -1,5 +1,94 @@
 # CHANGELOG
 
+## v1.6.4 - 2026-11-20
+
+The newer films stop hiding, genres open all the way up, descriptions
+can be read in your language, and the app now learns from what you
+look at, not just what you finish.
+
+Newer decades up front: the catalog is mostly old public domain film,
+and that cannot change, but the newer slice was being buried under
+download counts. Home now has a "2000s and Newer" row and an "80s and
+90s" row right after Top Rated. Membership is decided by the corrected
+release year (the year from the title and metadata, never an upload
+date), so a 1958 film an uploader happened to post in 2024 does not
+sneak into the 2000s row, and a real 2004 film does. Both rows rotate
+daily like every other row.
+
+Browse year sorts you can trust: "Release year, newest first" and
+"oldest first" in Browse used to order by the Archive's own year
+field, which is often an upload date. They now pull a wide candidate
+pool (up to 1,000 titles), work out each title's corrected release
+year, and sort by that, in chunks through the Load more button.
+Titles with no year that can be worked out sort last in newest-first
+order, never first. Every other sort works as before.
+
+Genre view: tapping a genre row's title (Horror, Comedy, Sci-Fi,
+Thriller, Noir, Westerns, Animation, Plot Twists, and the rows inside
+the 18+ section) opens that genre's whole catalog as a grid that
+loads in chunks of 48 with a Load more button. It is never fetched
+all at once. The view has its own sort control, defaulting to newest
+release year first, sub-genre chips where the genre has them, and it
+honors the same rules as everywhere else: watched titles hidden when
+you have that on, adult titles excluded outside the 18+ section,
+same-film copies collapsed.
+
+Reading language: Settings has a "Language for descriptions and
+subtitles" choice, stored per profile, defaulting to English. When a
+description is written in another language, the app detects that on
+the device and translates the text for display (hero and details),
+using free translation services that need no account or key. A note
+under the text says what language it was in, or that it was
+translated. When no translation service can be reached, the original
+text shows with a plain note naming its language. A translation is
+never faked. Translations are cached on the device, and stored data
+is never changed. Movie and show titles are never translated, ever.
+
+Subtitles, honestly: where an item itself carries subtitle files
+(.srt or .vtt in its file list), the app finds them, names their
+language, and converts SRT to WebVTT for the player. The limits are
+real: most Archive items carry no subtitle files at all, and the app
+cannot create subtitles that do not exist. On top of that,
+archive.org's file servers do not send the permission headers other
+websites need to load those files, so today the player lists a
+title's subtitle files with working links to open them, and the
+in-player subtitle track switches on by itself if the file can be
+loaded. Nothing is shown for titles without subtitle files.
+
+Behavior analytics: the app now also remembers, per profile, which
+titles you opened and which cards you clicked, alongside what you
+watch and how much of it. Those looks count in the same taste
+profile that picks your rows: a view or a click is a weak signal
+(repeated looks add up on a shrinking curve, and no amount of
+browsing one title can outweigh finishing it), while finishing,
+liking and rating stay the strong signals they were. In plain terms:
+what you browse now counts, a little; what you finish counts, a lot.
+Because your own behavior leads once it adds up, global
+download counts step back to what they should be: the starting
+quality floor for a new profile, and a tiebreaker. All of this lives
+only on your device, inside your profile. Nothing is uploaded, no
+network call is made for it, and it is covered by the same backup
+export and import, profile delete, and storage handling as the rest
+of your data.
+
+The 18+ section gets the same treatment, privately: your adult
+views, clicks, watches and finishes personalize the adult rows the
+same way, including Because rows inside the section. The isolation
+is absolute in both directions: adult signals never affect normal
+rows, normal signals never affect adult rows, and adult analytics
+never appear anywhere outside the unlocked, PIN gated section. The
+section also has more rows, broken out by its real tags: 18+ Films,
+Sex Comedies, Erotica, Sexploitation, Nudie Classics, Stag,
+Striptease and Mondo, and Adult Animation, each opening into the
+genre view behind the same PIN gate. Three more subjects were added
+to the adult pool definition after checking them title by title
+(nudie cutie, nudie-cutie, porno); every title they name was already
+reached by another tag, so the feature film pool stays at 150, and
+the rows sort them better rather than widening the net. The subjects
+rejected in v1.6.2 were checked again and are still mostly
+mainstream films wearing adult sounding tags (burlesque, nudity,
+nude, naked, sexy, exploitation, grindhouse), so they stay out.
+
 ## v1.6.3 - 2026-11-20
 
 Home rows change every day now, and the personalized rows are picked
