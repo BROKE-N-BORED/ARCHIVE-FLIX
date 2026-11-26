@@ -333,6 +333,19 @@
   </div>
 </div>
 
+<!-- WATCH ON YOUR PHONE -->
+<div id="phoneSheet" class="sheet-backdrop phone-backdrop" hidden>
+  <div class="sheet phone-sheet" role="dialog" aria-modal="true" aria-label="Watch on your phone" aria-labelledby="phoneTitle">
+    <button class="sheet-close" id="phoneClose" aria-label="Close">Close</button>
+    <h2 id="phoneTitle">Watch on your phone</h2>
+    <p class="phone-item-title" id="phoneItemTitle"></p>
+    <div class="phone-qr" id="phoneQr"></div>
+    <p class="sub" id="phoneQrNote" hidden>The QR code could not be made on this device. Use the link below instead.</p>
+    <p class="phone-url" id="phoneUrl"></p>
+    <p class="sub">Scan with your phone camera to open this title.</p>
+  </div>
+</div>
+
 <!-- PLAYER SHEET -->
 <div id="playerSheet" class="sheet-backdrop" hidden>
   <div class="sheet player-sheet" role="dialog" aria-modal="true" aria-label="Player" aria-labelledby="playerTitle">
@@ -401,6 +414,7 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
+<script src="qrcode.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

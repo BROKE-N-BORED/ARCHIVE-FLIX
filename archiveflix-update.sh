@@ -233,7 +233,7 @@ find_release_root() {
 install_files() {
   local root="$1" rel src dest stage
   mkdir -p "$APP_DIR/icons" || return 1
-  for rel in index.html app.js styles.css manifest.json sw.js archiveflix.sh archiveflix-update.sh icons/icon-192.svg icons/icon-512.svg icons/icon-180.png icons/icon-192.png icons/icon-512.png; do
+  for rel in index.html app.js styles.css qrcode.js manifest.json sw.js archiveflix.sh archiveflix-update.sh icons/icon-192.svg icons/icon-512.svg icons/icon-180.png icons/icon-192.png icons/icon-512.png; do
     src="$root/$rel"
     [ -f "$src" ] || continue
     dest="$APP_DIR/$rel"

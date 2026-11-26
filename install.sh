@@ -37,7 +37,7 @@ echo "Installing ARCHIVEFLIX..."
 
 mkdir -p "$APP_DIR" "$APPS_DIR" "$APP_DIR/icons"
 
-cp "$SRC_DIR/index.html" "$SRC_DIR/app.js" "$SRC_DIR/styles.css" "$APP_DIR/"
+cp "$SRC_DIR/index.html" "$SRC_DIR/app.js" "$SRC_DIR/styles.css" "$SRC_DIR/qrcode.js" "$APP_DIR/"
 [ -f "$SRC_DIR/manifest.json" ] && cp "$SRC_DIR/manifest.json" "$APP_DIR/"
 [ -f "$SRC_DIR/sw.js" ] && cp "$SRC_DIR/sw.js" "$APP_DIR/"
 cp "$SRC_DIR/icons/icon-192.svg" "$SRC_DIR/icons/icon-512.svg" "$APP_DIR/icons/"

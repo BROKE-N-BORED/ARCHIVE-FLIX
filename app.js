@@ -21,7 +21,7 @@ var API = "https://archive.org/advancedsearch.php";
 var META_API = "https://archive.org/metadata/";
 /* The release version, shown in Settings About. Bump with each
    release alongside the service worker cache version. */
-var APP_VERSION = "1.6.4";
+var APP_VERSION = "1.6.5";
 var STORE_KEY = "archiveflix.v1";
 var PROFILES_KEY = "archiveflix.profiles.v1";
 var MAX_PROFILES = 5;
@@ -637,6 +637,56 @@ function cleanText(t, max) {
 function posterUrl(id) { return "https://archive.org/services/img/" + id; }
 function embedUrl(id) { return "https://archive.org/embed/" + id; }
 function detailsUrl(id) { return "https://archive.org/details/" + id; }
+
+/* ---------- Watch on your phone (QR deep link) ---------- */
+/* The public site's address, used for the phone deep link and
+   nothing else. The QR code always names this origin, even when
+   the app is running from the desktop install's loopback server:
+   a phone cannot reach 127.0.0.1 on someone's PC, but it can
+   always reach the public site. */
+var PUBLIC_SITE_URL = "https://broke-n-bored.github.io/ARCHIVE-FLIX/";
+
+/* The deep link for one title: the public site plus a #title=
+   hash naming the Archive identifier. Pure, so the node test can
+   drive it. */
+function titleDeepLink(id) {
+  return PUBLIC_SITE_URL + "#title=" + encodeURIComponent(String(id));
+}
+
+/* The identifier named by a #title= hash, or null for any other
+   hash and for a malformed one. Identifiers are validated against
+   the Archive's own identifier shape (letters, digits, dot,
+   underscore, hyphen, at sign), so a crafted hash can only ever
+   name a title lookup, never anything else. Pure. */
+function titleIdFromHash(hash) {
+  if (!hash || typeof hash !== "string") return null;
+  var prefix = "#title=";
+  if (hash.indexOf(prefix) !== 0) return null;
+  var raw = hash.slice(prefix.length);
+  if (!raw || raw.length > 200) return null;
+  var id;
+  try { id = decodeURIComponent(raw); } catch (e) { return null; }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._@-]*$/.test(id)) return null;
+  return id;
+}
+
+/* The QR code for a URL as an inline SVG, drawn by the vendored
+   qrcode.js (Kazuhiko Arase's generator, MIT) entirely on the
+   device: no network call, no QR service. The margin is four
+   modules of quiet zone, the minimum scanners expect. Returns ""
+   when the generator is unavailable, so the dialog can fall back
+   to the plain link. */
+function qrSvgFor(url) {
+  if (typeof qrcode === "undefined") return "";
+  try {
+    var qr = qrcode(0, "M");
+    qr.addData(String(url));
+    qr.make();
+    return qr.createSvgTag({ cellSize: 6, margin: 24, scalable: true });
+  } catch (e) {
+    return "";
+  }
+}
 /* Subfolder files (Green Acres season folders) encode their whole
    path, slashes included, so "Season 1/file.mp4" becomes
    "Season%201%2Ffile.mp4". Whether archive.org accepts the
@@ -7097,6 +7147,7 @@ function openDetails(item, opts) {
       '<button class="btn" id="dDownload">Open in new tab' +
       (dl ? " (" + formatSize(dl.size) + ")" : "") + "</button>" +
       '<button class="btn" id="dList">' + (inList ? "Remove from My List" : "Add to My List") + "</button>" +
+      '<button class="btn" id="dPhone">' + QR_ICON_SVG + "Watch on your phone</button>" +
       '<button class="btn" id="dLike">' + (reaction === 1 ? "Liked" : "Like") + "</button>" +
       '<button class="btn' + (reaction === -1 ? " dislike-active" : "") + '" id="dNope" ' +
       'aria-pressed="' + (reaction === -1 ? "true" : "false") + '">' +
@@ -7131,6 +7182,9 @@ function openDetails(item, opts) {
     document.getElementById("dList").addEventListener("click", function () {
       toggleMyList(fullItem);
       openDetails(item, { adultContext: adultCtx });
+    });
+    document.getElementById("dPhone").addEventListener("click", function () {
+      openPhoneDialog(fullItem);
     });
     document.getElementById("dLike").addEventListener("click", function () {
       setReaction(fullItem, 1);
@@ -7239,6 +7293,77 @@ function refreshOpenDetails() {
   if (document.getElementById("detailsSheet").hidden) return;
   if (!currentDetails) return;
   openDetails(currentDetails, { adultContext: currentDetailsAdult });
+}
+
+/* ---------- Watch on your phone dialog ---------- */
+/* A small QR glyph for the button, drawn as one path with the
+   finder squares punched out (evenodd), in the button's own
+   colour. */
+var QR_ICON_SVG = '<svg class="btn-icon" viewBox="0 0 24 24" width="16" height="16" ' +
+  'aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="evenodd" ' +
+  'd="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5z' +
+  'm8-2h3v3h-3v-3zm5 0h3v3h-3v-3zm-5 5h3v3h-3v-3zm5 0h3v3h-3v-3z"/></svg>';
+
+function openPhoneDialog(item) {
+  if (!item || !item.id) return;
+  var url = titleDeepLink(item.id);
+  document.getElementById("phoneItemTitle").textContent =
+    titleWithYear(item.title, item.year);
+  document.getElementById("phoneUrl").textContent = url;
+  var svg = qrSvgFor(url);
+  var qrBox = document.getElementById("phoneQr");
+  qrBox.innerHTML = svg;
+  qrBox.hidden = !svg;
+  document.getElementById("phoneQrNote").hidden = !!svg;
+  document.getElementById("phoneSheet").hidden = false;
+  dialogOpened(dialogElFor("phoneSheet"));
+}
+
+function closePhoneDialog() {
+  document.getElementById("phoneSheet").hidden = true;
+  dialogClosed(dialogElFor("phoneSheet"));
+}
+
+/* Fetch one title by its Archive identifier, through the same
+   search plumbing every row uses (adult exclusion included, so a
+   deep link can never surface an 18+ title outside its section).
+   Resolves to the item, or null when the identifier names
+   nothing the app may show. */
+function fetchTitleById(id) {
+  if (!id) return Promise.resolve(null);
+  return searchArchive("identifier:" + escapeSearchTerm(id), { rows: 5 })
+    .then(function (res) {
+      var match = null;
+      (res.items || []).forEach(function (it) { if (it.id === id) match = it; });
+      return match;
+    }, function () { return null; });
+}
+
+function openTitleById(id) {
+  fetchTitleById(id).then(function (item) {
+    if (!item || !profileEntered) return;
+    openDetails(item);
+  });
+}
+
+/* Deep link handling. The hash is acted on once per distinct
+   value: enterProfile calls this after every entry (cold load,
+   picker, PIN unlock), and the hashchange listener calls it when
+   the link is opened with the app already running. Before a
+   profile is entered the hash is left unhandled, so the entry
+   that follows picks it up; an unknown or malformed hash is
+   simply never a title, and Home shows as normal. */
+var lastHandledTitleHash = null;
+
+function handleTitleHash() {
+  if (typeof window === "undefined" || !window.location) return;
+  var hash = window.location.hash || "";
+  if (hash === lastHandledTitleHash) return;
+  var id = titleIdFromHash(hash);
+  if (!id) { lastHandledTitleHash = hash; return; }
+  if (!profileEntered) return;
+  lastHandledTitleHash = hash;
+  openTitleById(id);
 }
 
 /* ---------- Episodes in the details sheet ---------- */
@@ -8872,6 +8997,9 @@ function enterProfile(id) {
   showView("home");
   var hashView = consumeInitialHash();
   if (hashView) showView(hashView);
+  /* A #title= deep link (the phone QR code) opens its title once
+     a profile is in; before entry it waits unhandled. */
+  handleTitleHash();
   if (wasLoaded) loadHome();
   refreshPersonalViews();
   /* Backfill adult flags for this profile's pre-v1.4.0 entries,
@@ -10383,6 +10511,13 @@ function init() {
   document.getElementById("detailsSheet").addEventListener("click", function (e) {
     if (e.target === e.currentTarget) closeDetails();
   });
+  document.getElementById("phoneClose").addEventListener("click", closePhoneDialog);
+  document.getElementById("phoneSheet").addEventListener("click", function (e) {
+    if (e.target === e.currentTarget) closePhoneDialog();
+  });
+  /* A phone deep link opened while the app is already running
+     arrives as a hash change. */
+  window.addEventListener("hashchange", handleTitleHash);
   document.getElementById("playerClose").addEventListener("click", closePlayer);
   document.getElementById("playerSheet").addEventListener("click", function (e) {
     if (e.target === e.currentTarget) closePlayer();
@@ -10398,6 +10533,7 @@ function init() {
     }
     if (e.key !== "Escape") return;
     if (!document.getElementById("profilePicker").hidden) { closePicker(); return; }
+    if (!document.getElementById("phoneSheet").hidden) { closePhoneDialog(); return; }
     if (!document.getElementById("playerSheet").hidden) closePlayer();
     else if (!document.getElementById("detailsSheet").hidden) closeDetails();
     else if (deleteArmedProfileId) disarmDelete();
@@ -10643,6 +10779,14 @@ if (typeof module !== "undefined" && module.exports) {
     embedUrl: embedUrl,
     downloadUrl: downloadUrl,
     detailsUrl: detailsUrl,
+    /* v1.6.5: watch on your phone (QR deep link). */
+    PUBLIC_SITE_URL: PUBLIC_SITE_URL,
+    titleDeepLink: titleDeepLink,
+    titleIdFromHash: titleIdFromHash,
+    qrSvgFor: qrSvgFor,
+    fetchTitleById: fetchTitleById,
+    openPhoneDialog: openPhoneDialog,
+    closePhoneDialog: closePhoneDialog,
     isYoutubeRip: isYoutubeRip,
     isBlocked: isBlocked,
     normalizeDoc: normalizeDoc,

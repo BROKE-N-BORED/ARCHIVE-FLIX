@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## v1.6.5 - 2026-11-23
+
+Watch on your phone: pick a film on the big screen, finish it on
+the small one.
+
+Every title's details sheet now has a "Watch on your phone"
+button. It opens a dialog with the title's name, a large QR code,
+and the plain link written out under it (tap the link to select
+it whole, if you would rather copy it than scan it). Scan the
+code with your phone camera and that exact title opens in
+ARCHIVEFLIX in the phone's browser, its details sheet ready with
+Play one tap away. A show lands on its details with its episodes
+listed, the same as opening it by hand.
+
+The code always names the public site, even when the app is
+running from the desktop install on the same computer: a phone
+cannot reach an address that only exists inside your PC, but it
+can always reach the public site. Opening the link with the app
+already running on the phone works too; the title opens over
+whatever you were looking at. A link whose title cannot be found
+just lands on Home, no error. Nothing is synced or uploaded: the
+phone opens the title under its own profile, with its own saved
+places, exactly as if you had searched for it there.
+
+The QR code is drawn on the device by a small generator vendored
+into the app (qrcode-generator by Kazuhiko Arase, MIT license,
+about 21 KB): no QR website, no network call, it works offline.
+
 ## v1.6.4 - 2026-11-20
 
 The newer films stop hiding, genres open all the way up, descriptions

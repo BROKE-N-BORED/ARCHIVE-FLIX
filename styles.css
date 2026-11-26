@@ -1179,6 +1179,39 @@ h1 { font-size: clamp(1.7rem, 4vw, 2.1rem); font-weight: 800; margin: 24px 0 6px
   box-shadow: var(--shadow-lg);
 }
 .details-sheet { max-width: 860px; }
+/* Watch on your phone: the QR dialog stacks over the details
+   sheet (50) and under the PIN pad (70). The code sits on white
+   with its quiet zone inside the SVG, sized for a phone camera
+   across a room. The link under it selects whole on a tap, so it
+   can be copied instead of scanned. */
+.sheet-backdrop.phone-backdrop { z-index: 60; }
+.phone-sheet { max-width: 430px; text-align: center; }
+/* The sticky Close pill floats over the sheet's top right; the
+   heading centres in the space left of it instead of running
+   underneath. */
+.phone-sheet h2 { padding-right: 96px; box-sizing: border-box; }
+.phone-item-title { font-size: 1.1rem; font-weight: 600; margin: 2px 0 14px; }
+.phone-qr {
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px;
+  width: min(280px, 78vw);
+  margin: 0 auto 14px;
+  line-height: 0;
+}
+.phone-qr svg { width: 100%; height: auto; display: block; }
+.phone-url {
+  user-select: all;
+  -webkit-user-select: all;
+  word-break: break-all;
+  font-size: 0.85rem;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 10px;
+}
+.btn .btn-icon { vertical-align: -3px; margin-right: 6px; }
 .player-sheet { max-width: 980px; }
 .details-body { min-height: 120px; }
 /* Sticky, not absolute, so the Close button stays visible while a
